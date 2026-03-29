@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>FlipRadar — UK Deal Scanner</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f7f7f5;
+  --white:#fff;
+  --ink:#111;
+  --ink2:#444;
+  --ink3:#888;
+  --border:#e5e5e0;
+  --border2:#d0d0c8;
+  --green:#16a34a;
+  --green-bg:#f0fdf4;
+  --green-light:#dcfce7;
+  --red:#dc2626;
+  --red-bg:#fef2f2;
+  --amber:#d97706;
+  --amber-bg:#fffbeb;
+  --blue:#2563eb;
+  --blue-bg:#eff6ff;
+  --purple:#7c3aed;
+  --purple-bg:#f5f3ff;
+  --teal:#0891b2;
+  --teal-bg:#ecfeff;
+  --mono:'JetBrains Mono',monospace;
+  --body:'Inter',sans-serif;
+  --r:10px;
+  --r-sm:6px;
+  --shadow:0 1px 3px rgba(0,0,0,0.06),0 4px 12px rgba(0,0,0,0.04);
+  --shadow-md:0 4px 16px rgba(0,0,0,0.08),0 1px 4px rgba(0,0,0,0.04);
+}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);min-height:100vh;-webkit-font-smoothing:antialiased}
+
+/* ── SETUP ── */
+#setup{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:1000;padding:1.5rem}
+.setup-box{background:var(--white);border:1px solid var(--border);border-radius:16px;padding:2rem;max-width:440px;width:100%;box-shadow:var(--shadow-md)}
+.setup-logo{font-family:var(--mono);font-size:0.7rem;font-weight:600;color:var(--green);letter-spacing:0.1em;margin-bottom:1.25rem;display:flex;align-items:center;gap:0.4rem}
+.setup-logo::before{content:'●';font-size:0.5rem}
+.setup-h{font-size:1.75rem;font-weight:700;letter-spacing:-0.03em;margin-bottom:0.5rem}
+.setup-p{font-size:0.875rem;color:var(--ink2);line-height:1.6;margin-bottom:1.5rem}
+.setup-steps{background:var(--bg);border-radius:var(--r);padding:1rem;margin-bottom:1.5rem;display:flex;flex-direction:column;gap:0.6rem}
+.setup-step{display:flex;gap:0.6rem;align-items:flex-start;font-size:0.82rem;color:var(--ink2);line-height:1.5}
+.sn{width:18px;height:18px;background:var(--ink);color:var(--white);border-radius:50%;font-family:var(--mono);font-size:0.55rem;font-weight:600;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.setup-label{font-family:var(--mono);font-size:0.6rem;font-weight:500;letter-spacing:0.08em;text-transform:uppercase;color:var(--ink3);margin-bottom:0.4rem;display:block}
+.setup-input{width:100%;background:var(--bg);border:1.5px solid var(--border2);border-radius:var(--r-sm);padding:0.7rem 0.9rem;color:var(--ink);font-family:var(--mono);font-size:0.78rem;outline:none;transition:border-color 0.15s;margin-bottom:0.9rem}
+.setup-input:focus{border-color:var(--ink)}
+.setup-btn{width:100%;background:var(--ink);color:var(--white);border:none;border-radius:var(--r-sm);padding:0.85rem;font-family:var(--body);font-size:0.95rem;font-weight:600;cursor:pointer;transition:opacity 0.15s;letter-spacing:-0.01em}
+.setup-btn:hover{opacity:0.85}
+
+/* ── APP ── */
+#app{display:none;min-height:100vh}
+
+/* Topbar */
+.topbar{background:var(--white);border-bottom:1px solid var(--border);height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 1rem;position:sticky;top:0;z-index:100;gap:0.75rem}
+.brand{display:flex;align-items:center;gap:0.5rem;font-weight:700;font-size:0.95rem;letter-spacing:-0.02em}
+.dot{width:7px;height:7px;background:var(--green);border-radius:50%;animation:pulse 2s ease-in-out infinite}
+.dot.amber{background:var(--amber)}
+.dot.red{background:var(--red);animation:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.status{font-family:var(--mono);font-size:0.58rem;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px}
+.tb-actions{display:flex;align-items:center;gap:0.35rem;flex-shrink:0}
+.tb-btn{background:transparent;border:1.5px solid var(--border2);color:var(--ink2);border-radius:var(--r-sm);padding:0.28rem 0.6rem;font-family:var(--body);font-size:0.75rem;font-weight:500;cursor:pointer;transition:all 0.15s;white-space:nowrap}
+.tb-btn:hover{border-color:var(--ink);color:var(--ink)}
+.tb-btn.active{background:var(--ink);color:var(--white);border-color:var(--ink)}
+.tb-btn.warn{color:var(--red);border-color:#fca5a5}
+.tb-icon{background:none;border:none;cursor:pointer;color:var(--ink3);font-size:1rem;padding:0.25rem;transition:color 0.15s}
+.tb-icon:hover{color:var(--ink)}
+
+/* Stats */
+.stats{background:var(--white);border-bottom:1px solid var(--border);display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.stat{padding:0.6rem 1rem;display:flex;flex-direction:column;gap:0.1rem;border-right:1px solid var(--border);flex-shrink:0}
+.stat:last-child{border-right:none}
+.stat-l{font-family:var(--mono);font-size:0.48rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--ink3)}
+.stat-v{font-weight:700;font-size:1rem;letter-spacing:-0.02em;color:var(--ink)}
+.stat-v.g{color:var(--green)}
+.stat-v.r{color:var(--red)}
+.stat-v.a{color:var(--amber)}
+
+/* Top deal banner */
+.top-deal{margin:0.75rem 1rem 0;background:var(--ink);color:var(--white);border-radius:var(--r);padding:0.85rem 1rem;display:none;align-items:center;gap:0.75rem;cursor:pointer;transition:opacity 0.15s}
+.top-deal:hover{opacity:0.92}
+.td-l{flex:1;min-width:0}
+.td-eye{font-family:var(--mono);font-size:0.5rem;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:0.2rem}
+.td-title{font-weight:600;font-size:0.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:0.15rem}
+.td-sub{font-size:0.75rem;color:rgba(255,255,255,0.55)}
+.td-r{text-align:right;flex-shrink:0}
+.td-roi{font-family:var(--mono);font-size:1.4rem;font-weight:700;line-height:1;color:#86efac}
+.td-net{font-family:var(--mono);font-size:0.6rem;color:rgba(255,255,255,0.5);margin-top:0.1rem}
+
+/* Filters */
+.filters{padding:0.7rem 1rem;display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap}
+.filter-pills{display:flex;background:var(--white);border:1.5px solid var(--border);border-radius:100px;padding:0.2rem;gap:0.15rem}
+.fp{font-size:0.78rem;font-weight:500;padding:0.25rem 0.8rem;border-radius:100px;cursor:pointer;border:none;background:transparent;color:var(--ink2);transition:all 0.15s;white-space:nowrap}
+.fp.on{background:var(--ink);color:var(--white)}
+.price-pill{display:flex;align-items:center;gap:0.35rem;background:var(--white);border:1.5px solid var(--border);border-radius:100px;padding:0.2rem 0.7rem}
+.price-pill label{font-size:0.75rem;color:var(--ink3)}
+.price-pill input{width:38px;border:none;background:transparent;font-family:var(--mono);font-size:0.78rem;font-weight:600;color:var(--ink);outline:none;text-align:center}
+.price-sep{color:var(--ink3);font-size:0.75rem}
+
+/* Cards grid */
+.cards-wrap{padding:0 1rem 2rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:0.85rem}
+
+/* ── DEAL CARD ── */
+.card{background:var(--white);border:1.5px solid var(--border);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow);transition:box-shadow 0.2s,transform 0.15s;animation:cardIn 0.3s cubic-bezier(0.16,1,0.3,1) forwards;opacity:0;transform:translateY(6px)}
+.card:hover{box-shadow:var(--shadow-md);transform:translateY(-1px)}
+@keyframes cardIn{to{opacity:1;transform:translateY(0)}}
+
+/* Tier stripe */
+.card-stripe{height:3px}
+.card-stripe.hot{background:linear-gradient(90deg,var(--red),#f97316)}
+.card-stripe.great{background:linear-gradient(90deg,var(--green),#059669)}
+.card-stripe.good{background:linear-gradient(90deg,var(--blue),#0891b2)}
+
+/* Card layout: image left, content right */
+.card-main{display:grid;grid-template-columns:100px 1fr;gap:0;min-height:140px}
+
+.card-img-wrap{position:relative;background:var(--bg);overflow:hidden}
+.card-img{width:100%;height:100%;object-fit:cover;display:block;transition:transform 0.3s}
+.card:hover .card-img{transform:scale(1.04)}
+.card-img-ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:2rem;color:var(--border2)}
+
+/* Tier badge on image */
+.tier-badge{position:absolute;top:0.5rem;left:0.5rem;font-family:var(--mono);font-size:0.55rem;font-weight:600;padding:0.2rem 0.45rem;border-radius:4px;text-transform:uppercase;letter-spacing:0.04em}
+.tier-badge.hot{background:var(--red);color:white}
+.tier-badge.great{background:var(--green);color:white}
+.tier-badge.good{background:var(--blue);color:white}
+
+/* Flags on image */
+.img-flags{position:absolute;bottom:0.4rem;left:0.4rem;display:flex;flex-direction:column;gap:0.2rem}
+.img-flag{font-size:0.6rem;padding:0.1rem 0.35rem;border-radius:3px;font-family:var(--mono);font-weight:500;backdrop-filter:blur(4px)}
+.img-flag.auction{background:rgba(220,38,38,0.9);color:white}
+.img-flag.cond-great{background:rgba(22,163,74,0.9);color:white}
+.img-flag.cond-warn{background:rgba(220,38,38,0.85);color:white}
+.img-flag.photo{background:rgba(37,99,235,0.9);color:white}
+.img-flag.size{background:rgba(124,58,237,0.9);color:white}
+
+/* Card content */
+.card-content{padding:0.75rem;display:flex;flex-direction:column;gap:0.5rem;min-width:0}
+
+.card-title{font-weight:600;font-size:0.85rem;line-height:1.3;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
+/* Big profit number */
+.profit-row{display:flex;align-items:baseline;gap:0.4rem;flex-wrap:wrap}
+.buy-price{font-family:var(--mono);font-size:0.8rem;color:var(--ink3)}
+.net-profit{font-family:var(--mono);font-size:1.3rem;font-weight:700;color:var(--green);letter-spacing:-0.02em}
+.roi-pct{font-family:var(--mono);font-size:0.65rem;color:var(--ink3)}
+
+/* Best platform badge */
+.best-platform{display:inline-flex;align-items:center;gap:0.3rem;padding:0.2rem 0.5rem;border-radius:4px;font-family:var(--mono);font-size:0.6rem;font-weight:600}
+.best-platform.vinted{background:var(--teal-bg);color:var(--teal);border:1px solid #a5f3fc}
+.best-platform.depop{background:var(--red-bg);color:var(--red);border:1px solid #fca5a5}
+.best-platform.ebay{background:var(--amber-bg);color:var(--amber);border:1px solid #fcd34d}
+
+.card-reason{font-size:0.75rem;color:var(--ink2);line-height:1.45;font-style:italic}
+
+/* Card expanded section */
+.card-expand{border-top:1px solid var(--border);padding:0.65rem 0.75rem;display:flex;flex-direction:column;gap:0.5rem;background:var(--bg)}
+
+/* Platform comparison */
+.platforms{display:grid;grid-template-columns:repeat(3,1fr);gap:0.35rem}
+.plat-box{padding:0.45rem 0.5rem;border-radius:var(--r-sm);border:1.5px solid var(--border);background:var(--white);text-align:center}
+.plat-box.best{border-color:var(--green);background:var(--green-bg)}
+.plat-name{font-family:var(--mono);font-size:0.5rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--ink3);margin-bottom:0.2rem}
+.plat-price{font-weight:700;font-size:0.82rem;color:var(--ink);letter-spacing:-0.01em}
+.plat-net{font-family:var(--mono);font-size:0.58rem;color:var(--green);font-weight:600}
+
+/* Vinted title */
+.vinted-title-wrap{background:var(--white);border:1px solid var(--border);border-radius:var(--r-sm);padding:0.45rem 0.6rem;cursor:pointer;transition:border-color 0.15s}
+.vinted-title-wrap:hover{border-color:var(--teal)}
+.vt-label{font-family:var(--mono);font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--ink3);margin-bottom:0.15rem;display:flex;justify-content:space-between;align-items:center}
+.vt-copy{font-size:0.55rem;color:var(--teal)}
+.vt-text{font-size:0.78rem;font-weight:500;color:var(--ink);line-height:1.3}
+
+/* Meta pills */
+.meta-pills{display:flex;gap:0.3rem;flex-wrap:wrap;align-items:center}
+.mp{font-family:var(--mono);font-size:0.55rem;font-weight:500;padding:0.15rem 0.4rem;border-radius:3px}
+.mp.days{background:var(--amber-bg);color:var(--amber)}
+.mp.bundle{background:var(--blue-bg);color:var(--blue)}
+.mp.cat{background:var(--bg);color:var(--ink3);border:1px solid var(--border)}
+.mp.free{background:var(--green-light);color:var(--green)}
+.mp.photo{background:var(--purple-bg);color:var(--purple)}
+.mp.market{background:var(--bg);color:var(--ink3);border:1px solid var(--border)}
+
+/* Card footer */
+.card-footer{padding:0.6rem 0.75rem;border-top:1px solid var(--border);display:flex;gap:0.4rem;align-items:center}
+.btn-buy{flex:1;background:var(--ink);color:var(--white);border:none;border-radius:var(--r-sm);padding:0.55rem 0.75rem;font-family:var(--body);font-size:0.82rem;font-weight:600;cursor:pointer;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:0.3rem;transition:opacity 0.15s}
+.btn-buy:hover{opacity:0.85}
+.btn-star{background:transparent;border:1.5px solid var(--border2);color:var(--ink3);border-radius:var(--r-sm);padding:0.55rem 0.65rem;font-size:0.85rem;cursor:pointer;transition:all 0.15s}
+.btn-star:hover{border-color:var(--amber);color:var(--amber)}
+.btn-star.on{background:var(--amber-bg);border-color:#fcd34d;color:var(--amber)}
+.timer{font-family:var(--mono);font-size:0.58rem;color:var(--red);font-weight:600;margin-left:auto;white-space:nowrap}
+
+/* Scan card */
+.scan-card{background:var(--white);border:1.5px solid var(--border);border-radius:var(--r);padding:1rem;display:flex;align-items:center;gap:0.85rem;box-shadow:var(--shadow);grid-column:1/-1;animation:scanPulse 2s ease-in-out infinite}
+@keyframes scanPulse{0%,100%{border-color:var(--border)}50%{border-color:var(--border2)}}
+.scan-spin{width:24px;height:24px;border:2px solid var(--border);border-top-color:var(--ink);border-radius:50%;animation:spin 0.9s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+.scan-t{font-weight:600;font-size:0.85rem;margin-bottom:0.1rem}
+.scan-s{font-size:0.75rem;color:var(--ink3)}
+.scan-bar{height:2px;background:var(--bg);border-radius:1px;overflow:hidden;margin-top:0.45rem}
+.scan-fill{height:100%;background:var(--ink);border-radius:1px;transition:width 0.3s}
+
+/* Empty */
+.empty{grid-column:1/-1;text-align:center;padding:3rem 2rem;color:var(--ink3);font-size:0.88rem;line-height:2.2}
+.empty-icon{font-size:2rem;margin-bottom:0.6rem;display:block}
+
+/* Drawers */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,0.2);z-index:190;display:none;backdrop-filter:blur(2px)}
+.overlay.on{display:block}
+.drawer{position:fixed;right:0;top:0;bottom:0;background:var(--white);border-left:1px solid var(--border);z-index:200;transform:translateX(100%);transition:transform 0.28s cubic-bezier(0.16,1,0.3,1);display:flex;flex-direction:column;box-shadow:-4px 0 20px rgba(0,0,0,0.06)}
+.drawer.on{transform:translateX(0)}
+.dw{width:300px}
+.ds{width:280px}
+.dh{padding:1rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.dh-t{font-weight:700;font-size:0.92rem}
+.dh-x{background:none;border:none;font-size:1rem;cursor:pointer;color:var(--ink3);padding:0.2rem}
+.dh-x:hover{color:var(--ink)}
+.d-body{flex:1;overflow-y:auto}
+.d-empty{text-align:center;padding:2rem 1.5rem;color:var(--ink3);font-size:0.83rem;line-height:2}
+.wi{padding:0.85rem 1rem;border-bottom:1px solid var(--border)}
+.wi-t{font-weight:600;font-size:0.82rem;line-height:1.35;margin-bottom:0.3rem}
+.wi-m{display:flex;justify-content:space-between;align-items:center}
+.wi-p{font-family:var(--mono);font-size:0.68rem;color:var(--green);font-weight:600}
+.wi-rm{font-size:0.7rem;color:var(--ink3);cursor:pointer}
+.wi-rm:hover{color:var(--red)}
+.d-sec{padding:0.9rem 1rem;border-bottom:1px solid var(--border)}
+.d-sec-l{font-family:var(--mono);font-size:0.52rem;text-transform:uppercase;letter-spacing:0.12em;color:var(--ink3);margin-bottom:0.65rem}
+.tog-row{display:flex;align-items:center;justify-content:space-between;font-size:0.83rem;color:var(--ink)}
+.tog-sub{font-size:0.72rem;color:var(--ink3);margin-top:0.2rem}
+.tog{width:34px;height:19px;background:var(--border2);border-radius:10px;position:relative;cursor:pointer;transition:background 0.2s;flex-shrink:0}
+.tog.on{background:var(--ink)}
+.tog::after{content:'';position:absolute;width:13px;height:13px;background:white;border-radius:50%;top:3px;left:3px;transition:left 0.2s}
+.tog.on::after{left:18px}
+.q-list{display:flex;flex-direction:column;gap:0.2rem;max-height:220px;overflow-y:auto}
+.qi{display:flex;align-items:center;justify-content:space-between;padding:0.28rem 0.45rem;border-radius:4px;font-size:0.75rem;border:1px solid transparent}
+.qi.active{background:var(--amber-bg);border-color:#fcd34d;color:var(--amber);font-weight:600}
+.qi.done{color:var(--border2)}
+.qi.pending{color:var(--ink3)}
+.qt{font-size:0.58rem;padding:0.08rem 0.3rem;border-radius:3px;background:var(--bg);color:var(--ink3)}
+.s-input{width:100%;background:var(--bg);border:1.5px solid var(--border2);border-radius:var(--r-sm);padding:0.65rem 0.85rem;color:var(--ink);font-family:var(--mono);font-size:0.75rem;outline:none;margin-bottom:0.5rem}
+.s-input:focus{border-color:var(--ink)}
+.s-btn{width:100%;background:var(--ink);color:var(--white);border:none;border-radius:var(--r-sm);padding:0.55rem;font-size:0.82rem;font-weight:600;cursor:pointer;font-family:var(--body)}
+
+/* Toast */
+.toast{position:fixed;bottom:1.25rem;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--white);border-radius:var(--r-sm);padding:0.65rem 1.1rem;font-size:0.82rem;font-weight:500;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,0.2);max-width:calc(100vw - 2rem);text-align:center;animation:toastIn 0.3s ease,toastOut 0.3s ease 3.5s forwards}
+@keyframes toastIn{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+@keyframes toastOut{to{opacity:0;transform:translateX(-50%) translateY(8px)}}
+
+@media(max-width:480px){
+  .topbar,.stats,.filters,.cards-wrap{padding-left:0.85rem;padding-right:0.85rem}
+  .top-deal{margin-left:0.85rem;margin-right:0.85rem}
+  .grid{grid-template-columns:1fr}
+  .card-main{grid-template-columns:85px 1fr}
+  .platforms{grid-template-columns:1fr 1fr 1fr}
+  .dw,.ds{width:100%}
+  .status{display:none}
+}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+</style>
+</head>
+<body>
+
+<!-- SETUP -->
+<div id="setup">
+  <div class="setup-box">
+    <div class="setup-logo">FlipRadar UK</div>
+    <div class="setup-h">Find cheap clothing<br>to flip for profit</div>
+    <div class="setup-p">Enter your proxy URL to connect to live eBay UK deals. Every listing is scored for Vinted, Depop and eBay resale potential.</div>
+    <div class="setup-steps">
+      <div class="setup-step"><div class="sn">1</div><span>eBay developer approved → copy Client ID &amp; Secret from developer.ebay.com</span></div>
+      <div class="setup-step"><div class="sn">2</div><span>Add credentials + Anthropic API key to Render → Environment → Save</span></div>
+      <div class="setup-step"><div class="sn">3</div><span>Paste your Render URL below and launch</span></div>
+    </div>
+    <label class="setup-label">Render Proxy URL</label>
+    <input class="setup-input" id="proxyInput" placeholder="https://flipradar-proxy.onrender.com" value="https://flipradar-proxy.onrender.com">
+    <button class="setup-btn" onclick="launch()">Launch FlipRadar →</button>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <div class="topbar">
+    <div style="display:flex;align-items:center;gap:0.6rem;min-width:0">
+      <div class="brand"><div class="dot" id="dot"></div>FlipRadar</div>
+      <div class="status" id="status">Starting...</div>
+    </div>
+    <div class="tb-actions">
+      <button class="tb-btn" id="pauseBtn" onclick="togglePause()">⏸ Pause</button>
+      <button class="tb-btn" id="alertBtn" onclick="toggleAlerts()">🔔</button>
+      <button class="tb-icon" onclick="openWatch()">★</button>
+      <button class="tb-icon" onclick="openSettings()">⚙</button>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-l">Deals</div><div class="stat-v" id="sDeals">0</div></div>
+    <div class="stat"><div class="stat-l">🔥 Hot</div><div class="stat-v r" id="sHot">0</div></div>
+    <div class="stat"><div class="stat-l">Best Profit</div><div class="stat-v g" id="sBest">—</div></div>
+    <div class="stat"><div class="stat-l">Avg ROI</div><div class="stat-v a" id="sAvg">—</div></div>
+    <div class="stat"><div class="stat-l">Scans</div><div class="stat-v" id="sScans">0</div></div>
+  </div>
+
+  <div class="top-deal" id="topDeal" onclick="goTopDeal()">
+    <div class="td-l">
+      <div class="td-eye">🏆 Best deal right now</div>
+      <div class="td-title" id="tdTitle">—</div>
+      <div class="td-sub" id="tdSub">—</div>
+    </div>
+    <div class="td-r">
+      <div class="td-roi" id="tdRoi">—</div>
+      <div class="td-net" id="tdNet">net profit</div>
+    </div>
+    <div style="color:rgba(255,255,255,0.3);font-size:1rem;flex-shrink:0">→</div>
+  </div>
+
+  <div class="filters">
+    <div class="filter-pills">
+      <button class="fp on" data-f="all" onclick="setFilter('all')">All</button>
+      <button class="fp" data-f="hot" onclick="setFilter('hot')">🔥 Hot</button>
+      <button class="fp" data-f="auction" onclick="setFilter('auction')">⚡ Auctions</button>
+      <button class="fp" data-f="miss" onclick="setFilter('miss')">⌨ Typos</button>
+    </div>
+    <div class="price-pill">
+      <label>£</label>
+      <input type="number" id="minP" value="0" min="0">
+      <span class="price-sep">–</span>
+      <input type="number" id="maxP" value="40" min="1">
+    </div>
+  </div>
+
+  <div class="cards-wrap">
+    <div class="grid" id="grid">
+      <div class="empty"><span class="empty-icon">📡</span>Connecting to eBay UK...<br>First deals appearing shortly.</div>
+    </div>
+  </div>
+</div>
+
+<!-- Overlay -->
+<div class="overlay" id="overlay" onclick="closeAll()"></div>
+
+<!-- Watchlist drawer -->
+<div class="drawer dw" id="watchDrawer">
+  <div class="dh"><div class="dh-t">★ Watchlist</div><button class="dh-x" onclick="closeAll()">✕</button></div>
+  <div class="d-body" id="watchBody"><div class="d-empty">Star deals to save them here.<br>Great for comparing before you buy.</div></div>
+</div>
+
+<!-- Settings drawer -->
+<div class="drawer ds" id="settingsDrawer">
+  <div class="dh"><div class="dh-t">⚙ Settings</div><button class="dh-x" onclick="closeAll()">✕</button></div>
+  <div class="d-body">
+    <div class="d-sec">
+      <div class="d-sec-l">Fee Deduction</div>
+      <div class="tog-row"><span>Deduct eBay fees (13%)</span><div class="tog on" id="feeTog" onclick="toggleFees()"></div></div>
+      <div class="tog-sub" id="feeNote">Net profit shown after eBay's cut</div>
+    </div>
+    <div class="d-sec">
+      <div class="d-sec-l">Proxy URL</div>
+      <input class="s-input" id="proxyEdit">
+      <button class="s-btn" onclick="saveProxy()">Save &amp; Reconnect</button>
+    </div>
+    <div class="d-sec">
+      <div class="d-sec-l">Scan Queue</div>
+      <div class="q-list" id="queueEl"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const EBAY_FEE = 0.13;
+const CAT = {unknown:'Hidden Gem',vintage:'Vintage',football:'Football',bundle:'Bundle',miss:'Typo',nike:'Nike',adidas:'Adidas',kids:'Kids',new:'Recent Drop'};
+
+const QUEUE = [
+  // ── SELLER IGNORANCE — best source of underpriced items ──
+  {q:'old jacket loft find clearance',cat:'unknown',brand:'Various',label:'Loft Find Jacket',avgSell:45,vintedQ:'vintage jacket'},
+  {q:'house clearance clothing jacket coat',cat:'unknown',brand:'Various',label:'House Clearance',avgSell:40,vintedQ:'vintage jacket coat'},
+  {q:'vintage jacket retro old unworn',cat:'unknown',brand:'Various',label:'Unworn Vintage',avgSell:50,vintedQ:'vintage jacket unworn'},
+  {q:'branded jacket old needs gone',cat:'unknown',brand:'Various',label:'Branded Jacket',avgSell:45,vintedQ:'branded jacket vintage'},
+  {q:'retro tracksuit top old branded',cat:'unknown',brand:'Various',label:'Retro Tracksuit',avgSell:40,vintedQ:'retro tracksuit top'},
+  {q:'vintage fleece half zip pullover',cat:'unknown',brand:'Various',label:'Half Zip Fleece',avgSell:38,vintedQ:'half zip fleece vintage'},
+  {q:'old ski jacket colourful retro',cat:'unknown',brand:'Various',label:'Ski Jacket',avgSell:55,vintedQ:'vintage ski jacket'},
+  {q:'vintage coat jacket bundle lot',cat:'bundle',brand:'Bundle',label:'Jacket Bundle',avgSell:80,vintedQ:'vintage jacket bundle'},
+
+  // ── ICONIC VINTAGE SPORTSWEAR — specific desirable items ──
+  {q:'Kappa Banda jacket',cat:'vintage',brand:'Kappa',label:'Kappa Banda',avgSell:55,vintedQ:'Kappa Banda jacket'},
+  {q:'Fila BJ track top',cat:'vintage',brand:'Fila',label:'Fila BJ Top',avgSell:58,vintedQ:'Fila BJ track top'},
+  {q:'Ellesse Palla jacket',cat:'vintage',brand:'Ellesse',label:'Ellesse Palla',avgSell:52,vintedQ:'Ellesse Palla jacket'},
+  {q:'Sergio Tacchini track jacket',cat:'vintage',brand:'Sergio Tacchini',label:'Sergio Tacchini',avgSell:55,vintedQ:'Sergio Tacchini jacket'},
+  {q:'Adidas Firebird track jacket',cat:'vintage',brand:'Adidas',label:'Adidas Firebird',avgSell:60,vintedQ:'Adidas Firebird jacket'},
+  {q:'Nike ACG jacket',cat:'nike',brand:'Nike ACG',label:'Nike ACG',avgSell:85,vintedQ:'Nike ACG jacket'},
+  {q:'Adidas Spezial SPZL jacket',cat:'adidas',brand:'Adidas Spezial',label:'Adidas Spezial',avgSell:75,vintedQ:'Adidas Spezial jacket'},
+  {q:'Patagonia fleece jacket pullover',cat:'vintage',brand:'Patagonia',label:'Patagonia Fleece',avgSell:70,vintedQ:'Patagonia fleece jacket'},
+  {q:'Helly Hansen fleece jacket vintage',cat:'vintage',brand:'Helly Hansen',label:'Helly Hansen',avgSell:55,vintedQ:'Helly Hansen jacket'},
+  {q:'Barbour wax jacket vintage',cat:'unknown',brand:'Barbour',label:'Barbour Wax Jacket',avgSell:85,vintedQ:'Barbour wax jacket'},
+  {q:'Champion reverse weave hoodie sweatshirt',cat:'vintage',brand:'Champion',label:'Champion Reverse Weave',avgSell:45,vintedQ:'Champion reverse weave hoodie'},
+  {q:'Carhartt jacket work coat vintage',cat:'vintage',brand:'Carhartt',label:'Carhartt Work Jacket',avgSell:55,vintedQ:'Carhartt jacket vintage'},
+  {q:'Ralph Lauren polo shirt',cat:'new',brand:'Ralph Lauren',label:'Ralph Lauren Polo',avgSell:35,vintedQ:'Ralph Lauren polo shirt'},
+  {q:'North Face fleece jacket',cat:'new',brand:'The North Face',label:'North Face Fleece',avgSell:60,vintedQ:'North Face fleece jacket'},
+
+  // ── HIDDEN GEM BRANDS — sellers rarely know value ──
+  {q:'Descente ski jacket',cat:'unknown',brand:'Descente',label:'Descente',avgSell:75,vintedQ:'Descente ski jacket'},
+  {q:'Bogner ski jacket vintage',cat:'unknown',brand:'Bogner',label:'Bogner Ski',avgSell:70,vintedQ:'Bogner ski jacket'},
+  {q:'Henri Lloyd sailing jacket',cat:'unknown',brand:'Henri Lloyd',label:'Henri Lloyd',avgSell:58,vintedQ:'Henri Lloyd jacket'},
+  {q:'Fiorucci vintage jacket top',cat:'unknown',brand:'Fiorucci',label:'Fiorucci',avgSell:65,vintedQ:'Fiorucci vintage'},
+  {q:'Moschino vintage top jacket',cat:'unknown',brand:'Moschino',label:'Moschino Vintage',avgSell:65,vintedQ:'Moschino vintage top'},
+  {q:'Versace jeans couture vintage top',cat:'unknown',brand:'Versace Jeans',label:'Versace Jeans Couture',avgSell:70,vintedQ:'Versace Jeans Couture vintage'},
+
+  // ── FOOTBALL SHIRTS — seller ignorance focused ──
+  {q:'old football shirt foreign unworn',cat:'football',brand:'Football Shirt',label:'Foreign Shirt',avgSell:55,vintedQ:'vintage football shirt'},
+  {q:'football shirt loft find old',cat:'football',brand:'Football Shirt',label:'Loft Find Shirt',avgSell:50,vintedQ:'vintage football shirt'},
+  {q:'rare football shirt away third',cat:'football',brand:'Football Shirt',label:'Rare Away Shirt',avgSell:60,vintedQ:'rare football shirt'},
+  {q:'Parma Fiorentina Sampdoria football shirt',cat:'football',brand:'Serie A',label:'Serie A Shirt',avgSell:72,vintedQ:'Serie A football shirt vintage'},
+  {q:'USSR Yugoslavia Eastern European football shirt',cat:'football',brand:'Eastern Europe',label:'Eastern Europe Shirt',avgSell:70,vintedQ:'vintage football shirt'},
+  {q:'J-League Japanese football shirt',cat:'football',brand:'Asia',label:'J-League Shirt',avgSell:65,vintedQ:'Japanese football shirt'},
+  {q:'Wimbledon Coventry Sheffield Wednesday shirt',cat:'football',brand:'UK Lower League',label:'Lower League Shirt',avgSell:52,vintedQ:'vintage football shirt UK'},
+  {q:'football shirts bundle job lot',cat:'bundle',brand:'Bundle',label:'Shirt Bundle',avgSell:85,vintedQ:'football shirts bundle'},
+
+  // ── KIDS DESIGNER — parents clearing wardrobes ──
+  {q:'Stone Island Junior jacket',cat:'kids',brand:'Stone Island Junior',label:'Stone Island Jr',avgSell:85,vintedQ:'Stone Island Junior jacket'},
+  {q:'CP Company Junior jacket kids',cat:'kids',brand:'CP Company Junior',label:'CP Company Jr',avgSell:75,vintedQ:'CP Company Junior'},
+  {q:'Moncler kids jacket boys girls',cat:'kids',brand:'Moncler Kids',label:'Moncler Kids',avgSell:120,vintedQ:'Moncler kids jacket'},
+  {q:'Burberry kids jacket coat boys',cat:'kids',brand:'Burberry Kids',label:'Burberry Kids',avgSell:55,vintedQ:'Burberry kids jacket'},
+  {q:'kids designer jacket boys clearance',cat:'kids',brand:'Kids Designer',label:'Kids Designer',avgSell:60,vintedQ:'kids designer jacket'},
+
+  // ── MISSPELLINGS — zero competition ──
+  {q:'Kapa Banda jacket',cat:'miss',brand:'Kappa',label:'⌨ Kapa Banda',avgSell:55,vintedQ:'Kappa Banda jacket'},
+  {q:'Descente Desente ski jacket',cat:'miss',brand:'Descente',label:'⌨ Desente',avgSell:75,vintedQ:'Descente ski jacket'},
+  {q:'Sergio Tachini track jacket',cat:'miss',brand:'Sergio Tacchini',label:'⌨ Tachini',avgSell:55,vintedQ:'Sergio Tacchini jacket'},
+  {q:'Patogonia Patagonia fleece',cat:'miss',brand:'Patagonia',label:'⌨ Patogonia',avgSell:70,vintedQ:'Patagonia fleece'},
+  {q:'Helly Hanson fleece jacket',cat:'miss',brand:'Helly Hansen',label:'⌨ Hanson',avgSell:55,vintedQ:'Helly Hansen jacket'},
+  {q:'Adiddas Firebird jacket',cat:'miss',brand:'Adidas',label:'⌨ Adiddas',avgSell:60,vintedQ:'Adidas Firebird jacket'},
+  {q:'Filla BJ track top',cat:'miss',brand:'Fila',label:'⌨ Filla BJ',avgSell:58,vintedQ:'Fila BJ track top'},
+  {q:'Mosschino vintage top',cat:'miss',brand:'Moschino',label:'⌨ Mosschino',avgSell:65,vintedQ:'Moschino vintage'},
+  {q:'Parme football shirt vintage',cat:'miss',brand:'Parma',label:'⌨ Parme',avgSell:75},
+  {q:'Stone Ilsand junior jacket',cat:'miss',brand:'Stone Island Jr',label:'⌨ Stone Ilsand Jr',avgSell:85},
+  {q:'Stater jacket vintage 90s',cat:'miss',brand:'Starter',label:'⌨ Stater',avgSell:55},
+  {q:'old ski jacket vintage colourful',cat:'miss',brand:'Unknown',label:'⌨ Vague ski',avgSell:55},
+  {q:'retro sailing jacket vintage',cat:'miss',brand:'Henri Lloyd',label:'⌨ Vague sailing',avgSell:50},
+];
+
+// State
+let PROXY = localStorage.getItem('fr_proxy') || 'https://flipradar-proxy.onrender.com';
+let paused=false, alertsOn=false, feeOn=true;
+let qIdx=0, scanCount=0;
+let allDeals=[], watchlist=JSON.parse(localStorage.getItem('fr_watch')||'[]');
+let activeFilter='all', topDealUrl=null, cdInt=null;
+
+function launch() {
+  const url = document.getElementById('proxyInput').value.trim().replace(/\/$/,'');
+  if (!url) return;
+  PROXY=url; localStorage.setItem('fr_proxy',url);
+  document.getElementById('setup').style.display='none';
+  document.getElementById('app').style.display='block';
+  renderQueue(); renderWatch(); updateStats();
+  wakeProxy();
+}
+
+// Wake up Render free tier
+async function wakeProxy() {
+  setStatus('Waking up server...','amber');
+  let attempts=0;
+  while(attempts<15){
+    try{
+      const r=await fetch(PROXY+'/health',{signal:AbortSignal.timeout(15000)});
+      if(r.ok){setStatus('Connected — scanning...','green');runBatch();return;}
+    }catch(e){
+      attempts++;
+      setStatus('Waking server... ('+attempts*15+'s)','amber');
+      await sleep(3000);
+    }
+  }
+  runBatch();
+}
+
+function setStatus(txt,color){
+  document.getElementById('status').textContent=txt;
+  document.getElementById('dot').className='dot'+(color==='amber'?' amber':color==='red'?' red':'');
+}
+
+// Run 3 searches in parallel
+async function runBatch(){
+  if(paused) return;
+  setStatus('Scanning...','amber');
+  renderQueue();
+
+  const batch=[];
+  for(let i=0;i<3;i++) batch.push(QUEUE[(qIdx+i)%QUEUE.length]);
+
+  showScanCard(batch[0]);
+
+  const results=await Promise.allSettled(batch.map(item=>fetchDeals(item)));
+
+  document.getElementById('activeScan')?.remove();
+  document.querySelector('.empty')?.remove();
+
+  results.forEach((r,i)=>{
+    if(r.status==='fulfilled'&&r.value.length>0){
+      const seen=new Set(allDeals.map(d=>d.id));
+      const fresh=r.value.filter(d=>!seen.has(d.id));
+      allDeals.push(...fresh);
+      if(alertsOn&&fresh.length>0){
+        const best=[...fresh].sort((a,b)=>b.bestNet-a.bestNet)[0];
+        if(best&&best.tier==='hot') toast('🔥 '+best.title.substring(0,40)+' — +£'+best.bestNet);
+      }
+    }
+  });
+
+  qIdx+=3; scanCount+=3;
+  capDeals(); reRender(); updateStats();
+  setStatus('','green');
+
+  let cd=15;
+  setStatus('Next in '+cd+'s · '+allDeals.length+' deals','green');
+  if(cdInt) clearInterval(cdInt);
+  cdInt=setInterval(()=>{
+    cd--;
+    if(cd<=0||paused){clearInterval(cdInt);return;}
+    setStatus('Next in '+cd+'s · '+allDeals.length+' deals','green');
+  },1000);
+
+  if(!paused) setTimeout(runBatch,15000);
+}
+
+function showScanCard(item){
+  const old=document.getElementById('activeScan');
+  if(old) old.remove();
+  const c=document.createElement('div');
+  c.className='scan-card'; c.id='activeScan';
+  c.innerHTML='<div class="scan-spin"></div><div style="flex:1"><div class="scan-t">Scanning '+item.label+' &amp; more...</div><div class="scan-s">eBay UK · £'+document.getElementById('minP').value+'–£'+document.getElementById('maxP').value+' · AI scoring + Vinted analysis</div><div class="scan-bar"><div class="scan-fill" id="scanFill" style="width:0%"></div></div></div>';
+  document.getElementById('grid').insertBefore(c,document.getElementById('grid').firstChild);
+  let p=0;
+  const t=setInterval(()=>{p=Math.min(88,p+Math.random()*10);const el=document.getElementById('scanFill');if(el)el.style.width=p+'%';else clearInterval(t);},400);
+}
+
+async function fetchDeals(item){
+  const params=new URLSearchParams({
+    q:item.q,
+    minPrice:document.getElementById('minP').value||'0',
+    maxPrice:document.getElementById('maxP').value||'25',
+    avgSell:item.avgSell,
+    cat:item.cat,
+    brand:item.brand,
+    vintedQ:item.vintedQ||item.q
+  });
+  const r=await fetch(PROXY+'/deals?'+params,{signal:AbortSignal.timeout(55000)});
+  if(!r.ok) throw new Error('Proxy '+r.status);
+  const d=await r.json();
+  return (d.deals||[]).map(deal=>({...deal,cat:item.cat,brand:item.brand}));
+}
+
+// Profit calcs
+function netProfit(deal){
+  const sell=deal.estSellPrice||deal.avgSell;
+  return feeOn?(sell*0.87)-deal.price:sell-deal.price;
+}
+function roi(deal){return (deal.bestNet/deal.price*100).toFixed(0);}
+
+// Filter
+function shouldShow(deal){
+  if(deal.tier==='skip') return false;
+  if(activeFilter==='all') return true;
+  if(activeFilter==='hot') return deal.tier==='hot';
+  if(activeFilter==='auction') return deal.isAuction===true;
+  if(activeFilter==='miss') return deal.cat==='miss';
+  return false;
+}
+
+function sorted(){return [...allDeals].filter(shouldShow).sort((a,b)=>b.bestNet-a.bestNet);}
+
+function capDeals(){
+  if(allDeals.length>200) allDeals=[...allDeals].sort((a,b)=>b.bestNet-a.bestNet).slice(0,150);
+}
+
+function reRender(){
+  const grid=document.getElementById('grid');
+  const sc=document.getElementById('activeScan');
+  grid.innerHTML='';
+  if(sc) grid.appendChild(sc);
+  const vis=sorted();
+  if(!vis.length&&!sc){grid.innerHTML='<div class="empty"><span class="empty-icon">🔍</span>No deals yet — scanning now...</div>';return;}
+  vis.slice(0,60).forEach(d=>grid.appendChild(buildCard(d)));
+}
+
+function setFilter(f){
+  activeFilter=f;
+  document.querySelectorAll('.fp').forEach(el=>el.classList.toggle('on',el.dataset.f===f));
+  reRender();
+}
+
+// Build card
+function buildCard(deal){
+  const net=deal.bestNet||netProfit(deal);
+  const roiPct=roi(deal);
+  const sell=deal.estSellPrice||deal.avgSell;
+  const liq=deal.liquidity||5;
+  const isWatched=watchlist.some(w=>w.id===deal.id);
+  const bp=deal.bestPlatform||'Vinted';
+  const catLabel=CAT[deal.cat]||deal.cat;
+  const icon=deal.cat==='football'?'⚽':deal.cat==='bundle'?'📦':deal.cat==='kids'?'👶':'👕';
+
+  // Timer for auctions
+  let timerHtml='';
+  if(deal.endDate){
+    const diff=new Date(deal.endDate)-new Date();
+    if(diff>0&&diff<86400000){
+      const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000);
+      timerHtml='<div class="timer">⏱ '+(h>0?h+'h ':'')+m+'m</div>';
+    }
+  }
+
+  const c=document.createElement('div');
+  c.className='card';
+  c.innerHTML=`
+    <div class="card-stripe ${deal.tier}"></div>
+    <div class="card-main">
+      <div class="card-img-wrap">
+        ${deal.image?`<img class="card-img" src="${esc(deal.image)}" alt="" loading="lazy" onerror="this.parentElement.innerHTML='<div class=\\'card-img-ph\\'>${icon}</div>'">`:`<div class="card-img-ph">${icon}</div>`}
+        <div class="tier-badge ${deal.tier}">${deal.tier==='hot'?'🔥 Hot':deal.tier==='great'?'⚡ Great':'✓ Good'}</div>
+        <div class="img-flags">
+          ${deal.isAuction&&deal.hoursLeft?`<div class="img-flag auction">⏱ ${deal.hoursLeft}h left</div>`:''}
+          ${deal.condFlag==='great'?'<div class="img-flag cond-great">✓ Great cond.</div>':deal.condFlag==='warn'?'<div class="img-flag cond-warn">⚠ Check cond.</div>':''}
+          ${deal.photoOpportunity?'<div class="img-flag photo">📸 Bad photos</div>':''}
+          ${deal.bestSize?'<div class="img-flag size">★ Best size</div>':''}
+        </div>
+      </div>
+      <div class="card-content">
+        <div class="card-title">${esc(deal.title)}</div>
+        <div class="profit-row">
+          <span class="buy-price">Buy £${deal.price?.toFixed(0)}</span>
+          <span class="net-profit">+£${net.toFixed(0)}</span>
+          <span class="roi-pct">${roiPct}% ROI</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">
+          <div class="best-platform ${bp.toLowerCase()}">★ Sell on ${bp}</div>
+          ${deal.sellDays?`<span style="font-family:var(--mono);font-size:0.58rem;color:var(--ink3)">~${deal.sellDays} days</span>`:''}
+        </div>
+        <div class="card-reason">${esc(deal.reason||'')}</div>
+      </div>
+    </div>
+
+    <div class="card-expand">
+      <div class="platforms">
+        <div class="plat-box${bp==='Vinted'?' best':''}">
+          <div class="plat-name">Vinted ${deal.vintedData?.isReal?'✓':'~'}</div>
+          <div class="plat-price">£${deal.vintedListPrice||Math.round((sell*1.1))||sell}</div>
+          <div class="plat-net">+£${deal.vintedNet?.toFixed(0)||(net*1.05).toFixed(0)}</div>
+        </div>
+        <div class="plat-box${bp==='Depop'?' best':''}">
+          <div class="plat-name">Depop</div>
+          <div class="plat-price">£${deal.depopPrice||Math.round((sell*1.08))||sell}</div>
+          <div class="plat-net">+£${deal.depopNet?.toFixed(0)||(net).toFixed(0)}</div>
+        </div>
+        <div class="plat-box${bp==='eBay'?' best':''}">
+          <div class="plat-name">eBay</div>
+          <div class="plat-price">£${deal.ebayListPrice||sell}</div>
+          <div class="plat-net">+£${deal.ebayNet?.toFixed(0)||net.toFixed(0)}</div>
+        </div>
+      </div>
+
+      ${deal.vintedData?.isReal ? `
+      <div style="background:var(--green-bg);border:1px solid var(--green-border);border-radius:var(--r-sm);padding:0.5rem 0.7rem;margin-top:0.35rem">
+        <div style="font-family:var(--mono);font-size:0.58rem;color:var(--green);font-weight:700;margin-bottom:0.15rem">👉 List on Vinted at £${deal.vintedData.recommendedPrice}</div>
+        <div style="font-size:0.72rem;color:var(--ink2);margin-bottom:0.2rem">${deal.vintedData.listingAdvice}</div>
+        <div style="font-family:var(--mono);font-size:0.52rem;color:var(--ink3)">${deal.vintedData.totalListings} live listings · Median £${deal.vintedData.medianPrice} · Range £${deal.vintedData.lowPrice}–£${deal.vintedData.highPrice} · Sells in ~${deal.vintedData.sellDays} days</div>
+      </div>` : `
+      <div style="background:var(--amber-bg);border:1px solid var(--amber-border);border-radius:var(--r-sm);padding:0.4rem 0.7rem;margin-top:0.35rem">
+        <div style="font-family:var(--mono);font-size:0.55rem;color:var(--amber)">⚠ No live Vinted data — check Vinted manually before buying</div>
+      </div>`}
+
+      ${deal.vintedTitle?`
+      <div class="vinted-title-wrap" onclick="copyTitle('${esc(deal.vintedTitle).replace(/'/g,"\\'")}',this)">
+        <div class="vt-label"><span>VINTED TITLE — tap to copy</span><span class="vt-copy">📋 Copy</span></div>
+        <div class="vt-text">${esc(deal.vintedTitle)}</div>
+      </div>`:''}
+
+      <div class="meta-pills">
+        ${deal.marketData?`<span class="mp market">📊 ${deal.marketData.trimmedSize} eBay listings · £${deal.marketData.lowPrice}–£deal.marketData.highPrice}</span>`:''}
+        ${deal.bundlePotential?'<span class="mp bundle">📦 Bundle</span>':''}
+        ${deal.freeShipping?'<span class="mp free">✓ Free shipping</span>':''}
+        ${deal.vintedCategory?`<span class="mp cat">${esc(deal.vintedCategory)}</span>`:''}
+        <span class="mp cat">${catLabel}</span>
+      </div>
+    </div>
+
+    <div class="card-footer">
+      <a class="btn-buy" href="${esc(deal.url)}" target="_blank" rel="noopener">View on eBay →</a>
+      <button class="btn-star ${isWatched?'on':''}" onclick="toggleWatch('${esc(deal.id)}','${esc(deal.title).replace(/'/g,"\\'")}',${deal.price?.toFixed(0)},${net.toFixed(0)},this)">${isWatched?'★':'☆'}</button>
+      ${timerHtml}
+    </div>`;
+  return c;
+}
+
+function copyTitle(title,el){
+  navigator.clipboard.writeText(title).then(()=>{
+    const copy=el.querySelector('.vt-copy');
+    if(copy){copy.textContent='✓ Copied!';setTimeout(()=>copy.textContent='📋 Copy',2000);}
+  });
+}
+
+// Controls
+function togglePause(){
+  paused=!paused;
+  const btn=document.getElementById('pauseBtn');
+  btn.textContent=paused?'▶ Resume':'⏸ Pause';
+  btn.classList.toggle('warn',paused);
+  if(!paused){setStatus('Resuming...','amber');runBatch();}
+  else{setStatus('Paused','red');if(cdInt)clearInterval(cdInt);}
+}
+
+function toggleAlerts(){
+  alertsOn=!alertsOn;
+  document.getElementById('alertBtn').classList.toggle('active',alertsOn);
+  document.getElementById('alertBtn').textContent=alertsOn?'🔔 ON':'🔔';
+  if(alertsOn) toast('Alerts on — hot deals will notify you');
+}
+
+function toggleFees(){
+  feeOn=!feeOn;
+  document.getElementById('feeTog').classList.toggle('on',feeOn);
+  document.getElementById('feeNote').textContent=feeOn?'Net profit shown after eBay\'s cut':'Showing gross profit before fees';
+  reRender();
+}
+
+function saveProxy(){
+  const url=document.getElementById('proxyEdit').value.trim().replace(/\/$/,'');
+  if(!url) return;
+  PROXY=url; localStorage.setItem('fr_proxy',url);
+  closeAll(); toast('Proxy URL updated');
+}
+
+function openWatch(){document.getElementById('watchDrawer').classList.add('on');document.getElementById('overlay').classList.add('on');}
+function openSettings(){document.getElementById('proxyEdit').value=PROXY;renderQueue();document.getElementById('settingsDrawer').classList.add('on');document.getElementById('overlay').classList.add('on');}
+function closeAll(){['watchDrawer','settingsDrawer'].forEach(id=>document.getElementById(id).classList.remove('on'));document.getElementById('overlay').classList.remove('on');}
+function goTopDeal(){if(topDealUrl)window.open(topDealUrl,'_blank');}
+
+// Watchlist
+function toggleWatch(id,title,price,net,btn){
+  const idx=watchlist.findIndex(w=>w.id===id);
+  if(idx>-1){watchlist.splice(idx,1);btn.textContent='☆';btn.classList.remove('on');}
+  else{watchlist.unshift({id,title,price,net});btn.textContent='★';btn.classList.add('on');}
+  localStorage.setItem('fr_watch',JSON.stringify(watchlist));
+  renderWatch(); updateStats();
+}
+
+function renderWatch(){
+  const el=document.getElementById('watchBody');
+  if(!watchlist.length){el.innerHTML='<div class="d-empty">Star deals to save them here.<br>Great for comparing before you buy.</div>';return;}
+  el.innerHTML=watchlist.map((w,i)=>`<div class="wi"><div class="wi-t">${esc(w.title)}</div><div class="wi-m"><span class="wi-p">Buy £${w.price} · +£${w.net} profit</span><span class="wi-rm" onclick="rmWatch(${i})">Remove</span></div></div>`).join('');
+}
+
+function rmWatch(i){watchlist.splice(i,1);localStorage.setItem('fr_watch',JSON.stringify(watchlist));renderWatch();updateStats();}
+
+// Queue
+function renderQueue(){
+  const start=Math.max(0,qIdx-1);
+  const items=QUEUE.slice(start,start+8);
+  document.getElementById('queueEl').innerHTML=items.map((item,i)=>{
+    const ri=start+i,state=ri<qIdx?'done':ri===qIdx?'active':'pending';
+    return `<div class="qi ${state}"><span>${item.label}</span><span class="qt">${CAT[item.cat]||item.cat}</span></div>`;
+  }).join('');
+}
+
+// Stats
+function updateStats(){
+  const set=(id,val)=>{const el=document.getElementById(id);if(el)el.textContent=val;};
+  set('sDeals',allDeals.length);
+  set('sScans',scanCount);
+  set('sHot',allDeals.filter(d=>d.tier==='hot').length);
+  set('sWatch',watchlist.length);
+  if(allDeals.length){
+    const s=sorted();
+    const nets=allDeals.map(d=>d.bestNet||0);
+    const rois=allDeals.map(d=>parseFloat(roi(d)));
+    set('sBest','£'+Math.max(...nets).toFixed(0));
+    set('sAvg',Math.round(rois.reduce((a,b)=>a+b,0)/rois.length)+'%');
+    if(s.length){
+      const best=s[0];
+      document.getElementById('topDeal').style.display='flex';
+      set('tdTitle',best.title);
+      set('tdSub','Buy £'+(best.price?.toFixed(0)||'?')+' · Sell on '+(best.bestPlatform||'Vinted')+' · '+(CAT[best.cat]||best.cat));
+      set('tdRoi',roi(best)+'%');
+      set('tdNet','+£'+(best.bestNet?.toFixed(0)||'?')+' net profit');
+      topDealUrl=best.url;
+    }
+  }
+}
+
+function toast(msg){const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),4200);}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+</script>
+</body>
+</html>
