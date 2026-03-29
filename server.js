@@ -1,4 +1,3 @@
-
 const express = require('express');
 const fetch = require('node-fetch');
 const app = express();
@@ -16,21 +15,18 @@ app.use(express.json());
 const CLIENT_ID = process.env.EBAY_CLIENT_ID;
 const CLIENT_SECRET = process.env.EBAY_CLIENT_SECRET;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
-const MIN_NET_PROFIT = 15;
+const MIN_NET_PROFIT = 12;
 const BEST_SIZES = ['s','m','l','xl','uk8','uk9','uk10','size 8','size 9','size 10'];
 
-// Words that mean the item should be skipped entirely before AI scoring
 const HARD_REJECT_WORDS = [
   'reproduction','replica','retro remake','re-make','reprint','bootleg',
   'badge','pin','pennant','programme','program','scarf','poster','mug',
   'sticker','patch','keyring','book','magazine','dvd','vhs','photo',
   'trading card','card','ticket','memorabilia only','figurine','statue',
-  'from usa','from us','ships from usa','located in usa','united states',
   'dirty','heavily worn','major stain','ripped','torn','broken zip',
   'bundle of badges','job lot badges','collection of badges'
 ];
 
-// Condition red flags — penalise but don't auto-reject
 const COND_WARN = ['stain','mark','marks','faded','damage','damaged','repair','hole','smell','fault','faulty','as seen','as is','worn','well worn','tatty','grubby','needs clean'];
 
 let cachedToken = null;
@@ -51,29 +47,19 @@ async function getToken() {
   return cachedToken;
 }
 
-// Check if listing should be hard-rejected before AI scoring
 function shouldReject(item) {
-  const text = ((item.title || '') + ' ' + (item.itemLocation?.country || '') + ' ' + (item.condition || '')).toLowerCase();
-  // Reject non-UK sellers
-  if (item.itemLocation && item.itemLocation.country && item.itemLocation.country !== 'GB') return 'non-UK seller';
-  // Reject based on title keywords
+  const text = ((item.title || '') + ' ' + (item.condition || '')).toLowerCase();
+  if (item.itemLocation && item.itemLocation.country && item.itemLocation.country !== 'GB') return 'non-UK';
   for (const word of HARD_REJECT_WORDS) {
     if (text.includes(word)) return 'rejected: ' + word;
   }
   return null;
 }
 
-function detectBadPhotos(title) {
-  const t = title.toLowerCase();
-  return t.split(' ').length < 4;
-}
+function detectBadPhotos(title) { return title.split(' ').length < 4; }
+function isBestSize(title) { const t = title.toLowerCase(); return BEST_SIZES.some(s => t.includes(s)); }
 
-function isBestSize(title) {
-  const t = title.toLowerCase();
-  return BEST_SIZES.some(s => t.includes(s));
-}
-
-// Get accurate market prices with outlier removal — UK only
+// Get eBay market prices — UK only, outliers removed
 async function getMarketPrices(query, token) {
   try {
     const q = encodeURIComponent(query);
@@ -82,24 +68,12 @@ async function getMarketPrices(query, token) {
     const data = await r.json();
     const items = (data.itemSummaries || []).filter(i => !shouldReject(i));
     if (!items.length) return null;
-
-    const prices = items
-      .map(i => parseFloat(i.price && i.price.value ? i.price.value : 0))
-      .filter(p => p > 2)
-      .sort((a, b) => a - b);
-
+    const prices = items.map(i => parseFloat(i.price?.value || 0)).filter(p => p > 2).sort((a, b) => a - b);
     if (prices.length < 3) return null;
-
-    const trimStart = Math.floor(prices.length * 0.25);
-    const trimEnd = Math.ceil(prices.length * 0.75);
-    const trimmed = prices.slice(trimStart, trimEnd);
+    const trimmed = prices.slice(Math.floor(prices.length * 0.25), Math.ceil(prices.length * 0.75));
     if (!trimmed.length) return null;
-
-    const avg = trimmed.reduce((a, b) => a + b, 0) / trimmed.length;
     const median = trimmed[Math.floor(trimmed.length / 2)];
-
     return {
-      avgPrice: Math.round(avg * 100) / 100,
       medianPrice: Math.round(median * 100) / 100,
       lowPrice: trimmed[0],
       highPrice: trimmed[trimmed.length - 1],
@@ -107,6 +81,81 @@ async function getMarketPrices(query, token) {
       trimmedSize: trimmed.length
     };
   } catch (e) { return null; }
+}
+
+// Get REAL Vinted UK prices by fetching public search results
+async function getVintedPrices(query) {
+  try {
+    const q = encodeURIComponent(query);
+    const url = 'https://www.vinted.co.uk/api/v2/catalog/items?search_text=' + q + '&per_page=30&currency=GBP&country_codes[]=GB&order=relevance';
+    const r = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-GB,en;q=0.9',
+        'Referer': 'https://www.vinted.co.uk/',
+        'Origin': 'https://www.vinted.co.uk'
+      },
+      signal: AbortSignal.timeout(8000)
+    });
+
+    if (!r.ok) return null;
+    const data = await r.json();
+    const items = data.items || [];
+    if (!items.length) return null;
+
+    const prices = items
+      .map(i => parseFloat(i.price || 0))
+      .filter(p => p > 1)
+      .sort((a, b) => a - b);
+
+    if (prices.length < 3) return null;
+
+    // Remove top and bottom 20% to eliminate outliers
+    const trimStart = Math.floor(prices.length * 0.2);
+    const trimEnd = Math.ceil(prices.length * 0.8);
+    const trimmed = prices.slice(trimStart, trimEnd);
+    if (!trimmed.length) return null;
+
+    const median = trimmed[Math.floor(trimmed.length / 2)];
+    const low = trimmed[0];
+    const high = trimmed[trimmed.length - 1];
+    const totalListings = items.length;
+
+    // Calculate recommended listing price based on competition
+    let recommendedPrice, listingAdvice, sellDays;
+    if (totalListings <= 5) {
+      // Low competition — list at or slightly above median
+      recommendedPrice = Math.round(median * 1.08);
+      listingAdvice = 'Low competition — list confidently above median';
+      sellDays = '3-7';
+    } else if (totalListings <= 15) {
+      // Medium competition — list just below median
+      recommendedPrice = Math.round(median * 0.97);
+      listingAdvice = 'Medium competition — list just below median to stand out';
+      sellDays = '5-10';
+    } else {
+      // High competition — list noticeably below median
+      recommendedPrice = Math.round(median * 0.92);
+      listingAdvice = 'High competition — price aggressively to sell';
+      sellDays = '7-14';
+    }
+
+    return {
+      medianPrice: Math.round(median * 100) / 100,
+      lowPrice: low,
+      highPrice: high,
+      totalListings,
+      trimmedSize: trimmed.length,
+      recommendedPrice,
+      listingAdvice,
+      sellDays,
+      isReal: true
+    };
+  } catch (e) {
+    console.log('Vinted fetch failed:', e.message);
+    return null;
+  }
 }
 
 // Get ending-soon UK auctions
@@ -135,112 +184,107 @@ app.get('/deals', async (req, res) => {
     const searchTerm = req.query.q || '';
     const q = encodeURIComponent(searchTerm);
     const min = req.query.minPrice || '0';
-    const max = req.query.maxPrice || '40';
-    const avgSell = parseFloat(req.query.avgSell || '50');
+    const max = req.query.maxPrice || '25';
+    const avgSell = parseFloat(req.query.avgSell || '45');
     const cat = req.query.cat || 'vintage';
     const brand = req.query.brand || '';
+    const vintedSearch = req.query.vintedQ || searchTerm;
 
-    // UK only filter added to main search
-    const url = 'https://api.ebay.com/buy/browse/v1/item_summary/search?q=' + q +
-      '&limit=20&marketplace_ids=EBAY_GB' +
-      '&filter=price:[' + min + '..' + max + '],priceCurrency:GBP,itemLocationCountry:GB' +
-      '&sort=newlyListed';
-
-    const [ebayRes, auctionItems, marketData] = await Promise.all([
-      fetch(url, { headers: { 'Authorization': 'Bearer ' + token, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_GB' } }),
+    // Run all data fetching in parallel
+    const [ebayRes, auctionItems, marketData, vintedData] = await Promise.all([
+      fetch('https://api.ebay.com/buy/browse/v1/item_summary/search?q=' + q + '&limit=20&marketplace_ids=EBAY_GB&filter=price:[' + min + '..' + max + '],priceCurrency:GBP,itemLocationCountry:GB&sort=newlyListed', {
+        headers: { 'Authorization': 'Bearer ' + token, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_GB' }
+      }),
       getEndingAuctions(searchTerm, token, max),
-      getMarketPrices(searchTerm, token)
+      getMarketPrices(searchTerm, token),
+      getVintedPrices(vintedSearch)
     ]);
 
     const ebayData = await ebayRes.json();
     const regularItems = (ebayData.itemSummaries || []).slice(0, 12);
-
-    // Merge and hard-filter before AI
     const allItems = [
       ...regularItems.map(i => ({ ...i, isAuction: false })),
       ...auctionItems.map(i => ({ ...i, isAuction: true }))
     ];
 
-    const realSellPrice = marketData ? marketData.medianPrice : avgSell;
+    if (!allItems.length) return res.json({ deals: [] });
 
-    // Hard reject non-UK, reproductions, non-clothing items BEFORE sending to AI
+    // Use real Vinted median if available, otherwise fall back to avgSell
+    const realEbaySell = marketData ? marketData.medianPrice : avgSell;
+    const realVintedSell = vintedData ? vintedData.medianPrice : null;
+    const effectiveSell = realVintedSell || realEbaySell;
+
     const listingData = allItems.map(l => {
-      const rejectReason = shouldReject(l);
-      if (rejectReason) return null;
-      const price = parseFloat(l.price && l.price.value ? l.price.value : 0);
+      if (shouldReject(l)) return null;
+      const price = parseFloat(l.price?.value || 0);
       if (price <= 0) return null;
       const title = l.title || '';
-      const condText = (l.condition || '').toLowerCase();
       const titleLower = title.toLowerCase();
-      const hasCondWarn = COND_WARN.some(w => titleLower.includes(w) || condText.includes(w));
+      const hasCondWarn = COND_WARN.some(w => titleLower.includes(w));
       const hoursLeft = l.itemEndDate ? Math.round((new Date(l.itemEndDate) - new Date()) / 3600000) : null;
       return {
-        id: l.itemId,
-        title,
-        price,
+        id: l.itemId, title, price,
         condition: l.condition,
         image: l.image ? l.image.imageUrl : null,
         url: l.itemWebUrl,
         endDate: l.itemEndDate || null,
         isAuction: l.isAuction || false,
-        hoursLeft,
+        hoursLeft, hasCondWarn,
         badPhotos: detectBadPhotos(title),
-        bestSize: isBestSize(title),
-        hasCondWarn,
-        country: l.itemLocation ? l.itemLocation.country : 'GB'
+        bestSize: isBestSize(title)
       };
     }).filter(Boolean);
 
     if (!listingData.length) return res.json({ deals: [] });
 
+    // AI scoring — uses real Vinted data as anchor
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 1500,
-        system: 'You are a UK clothing resale expert specialising in Vinted UK and eBay UK. All listings are from UK sellers only. Respond ONLY with a valid JSON array, no markdown.',
+        system: 'You are a UK clothing resale expert. Respond ONLY with a valid JSON array, no markdown.',
         messages: [{
           role: 'user',
-          content: `Score these UK eBay listings for resale profit. Buyer purchases on eBay UK, resells on Vinted UK or Depop.
+          content: `Score these UK eBay listings for resale on Vinted UK.
 
 Brand: ${brand}, Category: ${cat}
-eBay UK median sell price (UK sellers only, outliers removed): £${realSellPrice}
-${marketData ? 'From ' + marketData.trimmedSize + ' UK listings. Realistic range: £' + marketData.lowPrice + '-£' + marketData.highPrice : 'Estimated'}
+eBay UK median sell price: £${realEbaySell}
+${marketData ? 'eBay range (outliers removed): £' + marketData.lowPrice + '–£' + marketData.highPrice : ''}
+${vintedData && vintedData.isReal ? `
+REAL VINTED UK DATA (fetched live):
+- Active listings: ${vintedData.totalListings}
+- Median price: £${vintedData.medianPrice}
+- Realistic range: £${vintedData.lowPrice}–£${vintedData.highPrice}
+- Recommended list price: £${vintedData.recommendedPrice}
+- Competition level: ${vintedData.totalListings <= 5 ? 'LOW' : vintedData.totalListings <= 15 ? 'MEDIUM' : 'HIGH'}
+USE THIS REAL DATA for all Vinted price estimates. Do not guess.` : `No live Vinted data — estimate conservatively based on eBay prices. Vinted is rarely more than 15% above eBay for most items.`}
 
-IMPORTANT RULES:
-1. These are all UK sellers — no overseas shipping concerns
-2. SKIP anything that looks like: badge, pin, scarf, programme, poster, card, patch, figurine, book — we only want CLOTHING
-3. SKIP reproductions, replicas, remakes — only original vintage items have resale value
-4. SKIP anything with hasCondWarn:true unless the price is extremely low and profit still >£${MIN_NET_PROFIT}
-5. Football shirts: only original vintage shirts from real eras, not modern reproductions
+RULES:
+1. UK sellers only — already filtered
+2. SKIP: badges, pins, scarves, programmes, posters, cards, non-clothing items
+3. SKIP: reproductions, replicas, fakes
+4. SKIP: hasCondWarn:true items unless price is very low and profit still >= £${MIN_NET_PROFIT}
+5. Only return deals where Vinted net profit (sell price - buy price, no fees) >= £${MIN_NET_PROFIT}
 
-BOOST score: loft find, unworn, bnwt, never worn, immaculate, perfect, mint, excellent, no damage, deadstock
-PENALISE: stain, mark, damage, repair, hole, smell, fault, as seen, worn, faded, grubby, tatty
+BOOST: loft find, unworn, bnwt, never worn, immaculate, mint, excellent, deadstock
+PENALISE: stain, damage, hole, smell, fault, as seen, worn, faded, tatty
 
-Platforms:
-- Vinted UK: no seller fees, 20-40% higher prices than eBay for vintage sportswear/streetwear
-- Depop UK: no seller fees, great for streetwear/vintage, similar to Vinted prices
-- eBay UK: 13% fees, better for niche/football shirts/higher value items
-
-Only return deals where best platform net profit >= £${MIN_NET_PROFIT}.
-
-For each return:
+For each listing return:
 - id
-- tier: "hot" (>80% ROI), "great" (50-80%), "good" (30-50%), "skip" (<30% or profit <£${MIN_NET_PROFIT} or non-clothing or reproduction)
-- estSellPrice: realistic eBay UK sell price
-- vintedPrice: realistic Vinted UK sell price
-- depopPrice: realistic Depop UK sell price
-- vintedListPrice: exact Vinted listing price
+- tier: "hot" (>80% ROI), "great" (50-80%), "good" (30-50%), "skip" (anything else)
+- vintedListPrice: exact price to list on Vinted (use real data if available)
 - ebayListPrice: exact eBay Buy It Now price
-- bestPlatform: "Vinted", "Depop" or "eBay"
-- sellDays: "1-3", "3-7", "7-14", or "14-30"
+- vintedNet: vintedListPrice - buyPrice (no fees on Vinted)
+- bestPlatform: "Vinted" or "eBay"
+- sellDays: realistic days to sell ("1-3", "3-7", "7-14")
 - vintedTitle: keyword-rich Vinted title max 60 chars
 - vintedCategory: Vinted category
 - freeShipping: true if should offer free shipping on Vinted
 - bundlePotential: true if pairs well with similar items
-- photoOpportunity: true if bad photos = easy win
-- reason: one sentence flip opportunity
+- photoOpportunity: true if bad photos = easy win with better photography
+- reason: one sentence — why buy this and what to list it as on Vinted
 - liquidity: 1-10
 - condFlag: "great", "warn", or "ok"
 
@@ -263,33 +307,31 @@ Return ONLY the JSON array.`
       if (!orig || seenIds.has(orig.id)) return null;
       seenIds.add(orig.id);
 
-      const ebayNet = ((s.estSellPrice || realSellPrice) * 0.87) - orig.price;
-      const vintedNet = (s.vintedPrice || realSellPrice * 1.25) - orig.price;
-      const depopNet = (s.depopPrice || realSellPrice * 1.2) - orig.price;
-      const bestNet = Math.max(ebayNet, vintedNet, depopNet);
+      const vintedNet = (s.vintedListPrice || effectiveSell) - orig.price;
+      const ebayNet = ((s.ebayListPrice || realEbaySell) * 0.87) - orig.price;
+      const bestNet = Math.max(vintedNet, ebayNet);
 
       if (bestNet < MIN_NET_PROFIT) return null;
 
       return {
         ...orig, ...s, cat, brand,
-        avgSell: realSellPrice,
-        ebayNet: Math.round(ebayNet * 100) / 100,
+        avgSell: effectiveSell,
         vintedNet: Math.round(vintedNet * 100) / 100,
-        depopNet: Math.round(depopNet * 100) / 100,
+        ebayNet: Math.round(ebayNet * 100) / 100,
         bestNet: Math.round(bestNet * 100) / 100,
         netProfit: Math.round(bestNet * 100) / 100,
-        marketData: marketData || null
+        marketData: marketData || null,
+        vintedData: vintedData || null
       };
     }).filter(Boolean);
 
-    // Sort: urgent auctions first, then by profit
     deals.sort((a, b) => {
       if (a.isAuction && a.hoursLeft < 3) return -1;
       if (b.isAuction && b.hoursLeft < 3) return 1;
       return b.bestNet - a.bestNet;
     });
 
-    console.log(searchTerm + ': ' + allItems.length + ' found → ' + listingData.length + ' passed filter → ' + deals.length + ' deals');
+    console.log(searchTerm + ': ' + deals.length + ' deals | Vinted: ' + (vintedData ? '£' + vintedData.medianPrice + ' median, ' + vintedData.totalListings + ' listings' : 'no data'));
     res.json({ deals });
 
   } catch (e) {
