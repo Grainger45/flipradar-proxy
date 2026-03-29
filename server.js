@@ -104,11 +104,36 @@ app.get('/deals', async (req, res) => {
       headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1000,
-        system: 'You are a UK clothing resale expert. Respond ONLY with a valid JSON array, no markdown.',
+        max_tokens: 1200,
+        system: 'You are a UK clothing resale expert with deep knowledge of both eBay UK and Vinted UK pricing. Respond ONLY with a valid JSON array, no markdown.',
         messages: [{
           role: 'user',
-          content: 'Score these eBay UK listings. Brand: ' + brand + ', Category: ' + cat + '. Real average sell price on eBay right now: £' + realSellPrice + ' (from ' + (soldData ? soldData.sampleSize + ' real listings, range £' + soldData.minPrice + '-£' + soldData.maxPrice : 'estimated') + '). Only return deals where (sellPrice * 0.87) - buyPrice >= ' + MIN_NET_PROFIT + '. BOOST: loft find, unworn, bnwt, never worn, excellent, mint. PENALISE: stain, mark, damage, hole, smell, fault, as seen. Return for each: id, tier (hot/>80% ROI, great/50-80%, good/30-50%, skip), estSellPrice (base on £' + realSellPrice + ' adjusted for condition), reason (one sentence), liquidity (1-10), condFlag (great/warn/ok). Only non-skip items. Listings: ' + JSON.stringify(listingData) + ' Return ONLY JSON array.'
+          content: `Score these eBay UK listings for flip potential.
+Brand: ${brand}, Category: ${cat}
+Real average eBay sell price right now: £${realSellPrice} (from ${soldData ? soldData.sampleSize + ' real listings, range £' + soldData.minPrice + '-£' + soldData.maxPrice : 'estimated'})
+
+For Vinted UK pricing: Vinted typically sells vintage sportswear, streetwear and kids designer 20-40% higher than eBay due to younger fashion-conscious buyers. Football shirts sell similarly on both. Hidden gem brands like Descente, Fiorucci, Henri Lloyd often sell 25-35% higher on Vinted. Vinted has no seller fees (only 5% buyer protection fee paid by buyer) so your net is the full sale price.
+
+Only return deals where net profit on BEST platform is at least £${MIN_NET_PROFIT}.
+eBay net = sellPrice * 0.87 (13% fees)
+Vinted net = vintedPrice * 1.0 (no seller fees)
+
+BOOST score: loft find, unworn, bnwt, never worn, excellent, mint, immaculate
+PENALISE heavily: stain, mark, damage, hole, smell, fault, as seen
+
+For each listing return:
+- id (same as input)
+- tier: "hot" (>80% ROI on best platform), "great" (50-80%), "good" (30-50%), "skip" (<30% or profit under £${MIN_NET_PROFIT})
+- estSellPrice: realistic eBay sell price
+- vintedPrice: realistic Vinted UK sell price
+- bestPlatform: "Vinted" or "eBay" — whichever gives more net profit
+- reason: one sentence flip opportunity
+- liquidity: 1-10
+- condFlag: "great", "warn", or "ok"
+
+Only return non-skip items.
+Listings: ${JSON.stringify(listingData)}
+Return ONLY the JSON array.`
         }]
       })
     });
@@ -124,10 +149,19 @@ app.get('/deals', async (req, res) => {
       const orig = listingData.find(l => l.id === s.id);
       if (!orig || seenIds.has(orig.id)) return null;
       seenIds.add(orig.id);
-      const sellPrice = s.estSellPrice || realSellPrice;
-      const netProfit = (sellPrice * 0.87) - orig.price;
-      if (netProfit < MIN_NET_PROFIT) return null;
-      return { ...orig, ...s, cat, brand, avgSell: realSellPrice, netProfit: Math.round(netProfit * 100) / 100, soldData: soldData || null };
+      const ebayNet = ((s.estSellPrice || realSellPrice) * 0.87) - orig.price;
+      const vintedNet = (s.vintedPrice || (realSellPrice * 1.25)) - orig.price;
+      const bestNet = Math.max(ebayNet, vintedNet);
+      if (bestNet < MIN_NET_PROFIT) return null;
+      return {
+        ...orig, ...s, cat, brand,
+        avgSell: realSellPrice,
+        ebayNet: Math.round(ebayNet * 100) / 100,
+        vintedNet: Math.round(vintedNet * 100) / 100,
+        bestNet: Math.round(bestNet * 100) / 100,
+        netProfit: Math.round(bestNet * 100) / 100,
+        soldData: soldData || null
+      };
     }).filter(Boolean);
 
     res.json({ deals });
