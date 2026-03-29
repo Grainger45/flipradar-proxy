@@ -15,7 +15,7 @@ app.use(express.json());
 const CLIENT_ID = process.env.EBAY_CLIENT_ID;
 const CLIENT_SECRET = process.env.EBAY_CLIENT_SECRET;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
-const MIN_NET_PROFIT = 12;
+const MIN_NET_PROFIT = 10;
 const BEST_SIZES = ['s','m','l','xl','uk8','uk9','uk10','size 8','size 9','size 10'];
 
 const HARD_REJECT_WORDS = [
@@ -240,7 +240,7 @@ app.get('/deals', async (req, res) => {
     const searchTerm = req.query.q || '';
     const q = encodeURIComponent(searchTerm);
     const min = req.query.minPrice || '0';
-    const max = req.query.maxPrice || '25';
+    const max = req.query.maxPrice || '15';
     const avgSell = parseFloat(req.query.avgSell || '45');
     const cat = req.query.cat || 'vintage';
     const brand = req.query.brand || '';
