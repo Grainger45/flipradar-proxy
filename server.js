@@ -178,6 +178,62 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', hasId: !!CLIENT_ID, hasSecret: !!CLIENT_SECRET, hasAI: !!ANTHROPIC_KEY });
 });
 
+// Search Oxfam Online for cheap charity shop finds
+async function searchOxfam(query, maxPrice) {
+  try {
+    const q = encodeURIComponent(query);
+    const url = 'https://www.oxfam.org.uk/search/?q=' + q + '&department=clothes&price_max=' + maxPrice + '&in_stock=true&sort=newest';
+    const r = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-GB,en;q=0.9'
+      },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!r.ok) return [];
+    const html = await r.text();
+
+    // Parse product listings from HTML
+    const items = [];
+    const productRegex = /<article[^>]*class="[^"]*product[^"]*"[^>]*>([\s\S]*?)<\/article>/gi;
+    let match;
+    while ((match = productRegex.exec(html)) !== null) {
+      const block = match[1];
+      const titleMatch = block.match(/class="[^"]*product[^"]*title[^"]*"[^>]*>([^<]+)</i) ||
+                         block.match(/alt="([^"]+)"/i);
+      const priceMatch = block.match(/£([\d.]+)/);
+      const urlMatch = block.match(/href="(\/shop\/[^"]+)"/i);
+      const imgMatch = block.match(/src="(https?:\/\/[^"]*oxfam[^"]*\.(?:jpg|jpeg|png|webp)[^"]*)"/i);
+
+      if (titleMatch && priceMatch && urlMatch) {
+        const price = parseFloat(priceMatch[1]);
+        if (price > 0 && price <= parseFloat(maxPrice)) {
+          items.push({
+            id: 'oxfam-' + Math.random().toString(36).substr(2, 9),
+            title: titleMatch[1].trim(),
+            price,
+            condition: 'Used',
+            image: imgMatch ? imgMatch[1] : null,
+            url: 'https://www.oxfam.org.uk' + urlMatch[1],
+            source: 'Oxfam',
+            isAuction: false,
+            hoursLeft: null,
+            hasCondWarn: false,
+            badPhotos: false,
+            bestSize: isBestSize(titleMatch[1])
+          });
+        }
+      }
+    }
+    console.log('Oxfam: found ' + items.length + ' items for "' + query + '"');
+    return items.slice(0, 8);
+  } catch (e) {
+    console.log('Oxfam fetch failed:', e.message);
+    return [];
+  }
+}
+
 app.get('/deals', async (req, res) => {
   try {
     const token = await getToken();
@@ -190,31 +246,36 @@ app.get('/deals', async (req, res) => {
     const brand = req.query.brand || '';
     const vintedSearch = req.query.vintedQ || searchTerm;
 
-    // Run all data fetching in parallel
-    const [ebayRes, auctionItems, marketData, vintedData] = await Promise.all([
+    // Run all data fetching in parallel — eBay + Oxfam + market data
+    const [ebayRes, auctionItems, marketData, vintedData, oxfamItems] = await Promise.all([
       fetch('https://api.ebay.com/buy/browse/v1/item_summary/search?q=' + q + '&limit=20&marketplace_ids=EBAY_GB&filter=price:[' + min + '..' + max + '],priceCurrency:GBP,itemLocationCountry:GB&sort=newlyListed', {
         headers: { 'Authorization': 'Bearer ' + token, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_GB' }
       }),
       getEndingAuctions(searchTerm, token, max),
       getMarketPrices(searchTerm, token),
-      getVintedPrices(vintedSearch)
+      getVintedPrices(vintedSearch),
+      searchOxfam(searchTerm, max)
     ]);
 
     const ebayData = await ebayRes.json();
-    const regularItems = (ebayData.itemSummaries || []).slice(0, 12);
+    const regularItems = (ebayData.itemSummaries || []).slice(0, 10);
+
+    // Merge eBay + Oxfam + auction items
     const allItems = [
-      ...regularItems.map(i => ({ ...i, isAuction: false })),
-      ...auctionItems.map(i => ({ ...i, isAuction: true }))
+      ...regularItems.map(i => ({ ...i, isAuction: false, source: 'eBay' })),
+      ...auctionItems.map(i => ({ ...i, isAuction: true, source: 'eBay' })),
+      ...oxfamItems
     ];
 
     if (!allItems.length) return res.json({ deals: [] });
 
-    // Use real Vinted median if available, otherwise fall back to avgSell
     const realEbaySell = marketData ? marketData.medianPrice : avgSell;
     const realVintedSell = vintedData ? vintedData.medianPrice : null;
     const effectiveSell = realVintedSell || realEbaySell;
 
     const listingData = allItems.map(l => {
+      // Oxfam items already formatted correctly
+      if (l.source === 'Oxfam') return l;
       if (shouldReject(l)) return null;
       const price = parseFloat(l.price?.value || 0);
       if (price <= 0) return null;
@@ -227,6 +288,7 @@ app.get('/deals', async (req, res) => {
         condition: l.condition,
         image: l.image ? l.image.imageUrl : null,
         url: l.itemWebUrl,
+        source: 'eBay',
         endDate: l.itemEndDate || null,
         isAuction: l.isAuction || false,
         hoursLeft, hasCondWarn,
