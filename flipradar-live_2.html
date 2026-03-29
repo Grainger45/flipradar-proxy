@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>FlipRadar — UK Deal Scanner</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #f5f4f0; --white: #ffffff; --ink: #1a1a1a; --ink2: #4a4a4a; --ink3: #888;
+  --border: #e0deda; --border2: #d0cec8;
+  --green: #1a7a4a; --green-bg: #edf7f1; --green-border: #b8e4cc;
+  --red: #c0392b; --red-bg: #fdf0ee; --red-border: #f0c0bb;
+  --amber: #b8600a; --amber-bg: #fdf5ec; --amber-border: #f0d5b0;
+  --blue: #1a4a8a; --blue-bg: #eef3fb;
+  --purple: #6a2aaa; --purple-bg: #f5eefb;
+  --tag-bg: #efefeb;
+  --mono: 'JetBrains Mono', monospace;
+  --body: 'Instrument Sans', sans-serif;
+  --serif: 'Instrument Serif', serif;
+  --radius: 12px; --radius-sm: 7px;
+  --shadow: 0 1px 3px rgba(0,0,0,0.07), 0 4px 16px rgba(0,0,0,0.05);
+  --shadow-hover: 0 2px 8px rgba(0,0,0,0.1), 0 8px 24px rgba(0,0,0,0.08);
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--body); min-height: 100vh; -webkit-font-smoothing: antialiased; }
+
+/* SETUP */
+#setupScreen { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 1.5rem; }
+.setup-card { background: var(--white); border: 1px solid var(--border); border-radius: 20px; padding: 2.5rem; max-width: 460px; width: 100%; box-shadow: var(--shadow); }
+.setup-eyebrow { font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink3); margin-bottom: 1rem; }
+.setup-title { font-family: var(--serif); font-size: 2.2rem; line-height: 1.1; margin-bottom: 0.6rem; letter-spacing: -0.02em; }
+.setup-title em { font-style: italic; }
+.setup-desc { font-size: 0.88rem; color: var(--ink2); line-height: 1.6; margin-bottom: 1.5rem; }
+.setup-steps { display: flex; flex-direction: column; gap: 0.7rem; margin-bottom: 1.8rem; padding: 1.1rem; background: var(--bg); border-radius: var(--radius); }
+.setup-step { display: flex; gap: 0.7rem; align-items: flex-start; font-size: 0.82rem; color: var(--ink2); line-height: 1.5; }
+.step-n { width: 20px; height: 20px; flex-shrink: 0; background: var(--ink); color: var(--white); border-radius: 50%; font-family: var(--mono); font-size: 0.58rem; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+.setup-label { font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink3); margin-bottom: 0.45rem; display: block; }
+.setup-input { width: 100%; background: var(--bg); border: 1.5px solid var(--border2); border-radius: var(--radius-sm); padding: 0.72rem 1rem; color: var(--ink); font-family: var(--mono); font-size: 0.78rem; outline: none; transition: border-color 0.15s; margin-bottom: 1rem; }
+.setup-input:focus { border-color: var(--ink); }
+.setup-btn { width: 100%; background: var(--ink); color: var(--white); border: none; border-radius: var(--radius-sm); padding: 0.88rem; font-family: var(--body); font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }
+.setup-btn:hover { opacity: 0.85; }
+
+/* APP */
+#app { display: none; min-height: 100vh; }
+
+/* Topbar */
+.topbar { background: var(--white); border-bottom: 1px solid var(--border); padding: 0 1.25rem; height: 54px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; gap: 1rem; }
+.topbar-left { display: flex; align-items: center; gap: 0.85rem; min-width: 0; }
+.logo { display: flex; align-items: center; gap: 0.45rem; font-weight: 700; font-size: 1rem; letter-spacing: -0.02em; flex-shrink: 0; }
+.logo-dot { width: 8px; height: 8px; background: var(--green); border-radius: 50%; animation: breathe 2.5s ease-in-out infinite; }
+.logo-dot.scanning { background: var(--amber); }
+.logo-dot.paused { background: var(--red); animation: none; }
+@keyframes breathe { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
+.scan-status { font-family: var(--mono); font-size: 0.6rem; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar-right { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
+.tb-btn { background: transparent; border: 1.5px solid var(--border2); color: var(--ink2); border-radius: var(--radius-sm); padding: 0.28rem 0.65rem; font-family: var(--body); font-size: 0.78rem; font-weight: 500; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+.tb-btn:hover { border-color: var(--ink); color: var(--ink); }
+.tb-btn.on { background: var(--ink); color: var(--white); border-color: var(--ink); }
+.tb-btn.warn { border-color: var(--red-border); color: var(--red); }
+.tb-icon { background: transparent; border: none; color: var(--ink3); cursor: pointer; padding: 0.25rem 0.3rem; font-size: 1.05rem; transition: color 0.15s; }
+.tb-icon:hover { color: var(--ink); }
+
+/* Stats */
+.stats-banner { background: var(--white); border-bottom: 1px solid var(--border); display: flex; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.stat-cell { display: flex; flex-direction: column; padding: 0.65rem 1.1rem; gap: 0.12rem; border-right: 1px solid var(--border); flex-shrink: 0; min-width: 80px; }
+.stat-cell:last-child { border-right: none; }
+.sc-label { font-family: var(--mono); font-size: 0.48rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink3); }
+.sc-val { font-weight: 700; font-size: 1.05rem; letter-spacing: -0.02em; color: var(--ink); }
+.sc-val.g { color: var(--green); }
+.sc-val.r { color: var(--red); }
+.sc-val.a { color: var(--amber); }
+
+/* Top deal */
+.top-deal { margin: 1rem 1.25rem 0; background: var(--ink); color: var(--white); border-radius: var(--radius); padding: 1rem 1.1rem; display: none; align-items: center; justify-content: space-between; gap: 1rem; cursor: pointer; transition: opacity 0.15s; }
+.top-deal:hover { opacity: 0.9; }
+.td-left { min-width: 0; flex: 1; }
+.td-eyebrow { font-family: var(--mono); font-size: 0.52rem; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.45); margin-bottom: 0.25rem; }
+.td-title { font-weight: 600; font-size: 0.88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 0.2rem; }
+.td-sub { font-size: 0.76rem; color: rgba(255,255,255,0.55); }
+.td-right { text-align: right; flex-shrink: 0; }
+.td-roi { font-family: var(--mono); font-size: 1.5rem; font-weight: 700; line-height: 1; color: #a8f0c8; }
+.td-net { font-family: var(--mono); font-size: 0.65rem; color: rgba(255,255,255,0.5); margin-top: 0.1rem; }
+.td-arr { color: rgba(255,255,255,0.3); font-size: 1rem; flex-shrink: 0; }
+
+/* Filters */
+.filters-row { padding: 0.8rem 1.25rem; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+.filter-tabs { display: flex; background: var(--white); border: 1.5px solid var(--border); border-radius: 100px; padding: 0.22rem; gap: 0.2rem; }
+.f-tab { font-size: 0.8rem; font-weight: 500; padding: 0.28rem 0.85rem; border-radius: 100px; cursor: pointer; transition: all 0.15s; color: var(--ink2); white-space: nowrap; border: none; background: transparent; }
+.f-tab.on { background: var(--ink); color: var(--white); }
+.price-wrap { display: flex; align-items: center; gap: 0.4rem; background: var(--white); border: 1.5px solid var(--border); border-radius: 100px; padding: 0.22rem 0.8rem; }
+.price-wrap label { font-size: 0.76rem; color: var(--ink3); }
+.price-wrap input { width: 42px; border: none; background: transparent; font-family: var(--mono); font-size: 0.78rem; font-weight: 600; color: var(--ink); outline: none; text-align: center; }
+.price-sep { color: var(--ink3); font-size: 0.75rem; }
+
+/* Cards */
+.cards-wrap { padding: 0 1.25rem 2rem; }
+.cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
+
+/* Deal card */
+.deal-card { background: var(--white); border: 1.5px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); transition: box-shadow 0.2s, transform 0.2s; animation: cardIn 0.3s cubic-bezier(0.16,1,0.3,1) forwards; opacity: 0; transform: translateY(6px); display: flex; flex-direction: column; }
+.deal-card:hover { box-shadow: var(--shadow-hover); transform: translateY(-2px); }
+@keyframes cardIn { to { opacity:1; transform:translateY(0); } }
+.deal-card.hot { border-top: 3px solid var(--red); }
+.deal-card.great { border-top: 3px solid var(--green); }
+.deal-card.good { border-top: 3px solid var(--blue); }
+
+/* Card image */
+.card-img-wrap { position: relative; height: 175px; overflow: hidden; background: var(--bg); flex-shrink: 0; }
+.card-img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.3s; }
+.deal-card:hover .card-img { transform: scale(1.03); }
+.card-img-ph { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 2.8rem; color: var(--border2); background: var(--bg); }
+.roi-badge { position: absolute; top: 0.65rem; right: 0.65rem; font-family: var(--mono); font-size: 0.72rem; font-weight: 700; padding: 0.25rem 0.55rem; border-radius: 5px; }
+.roi-badge.hot { background: var(--red); color: white; }
+.roi-badge.great { background: var(--green); color: white; }
+.roi-badge.good { background: var(--blue); color: white; }
+.cond-flag { position: absolute; top: 0.65rem; left: 0.65rem; font-size: 0.68rem; font-weight: 600; padding: 0.18rem 0.48rem; border-radius: 4px; backdrop-filter: blur(4px); }
+.cond-flag.gc { background: rgba(237,247,241,0.92); color: var(--green); }
+.cond-flag.wc { background: rgba(253,240,238,0.92); color: var(--red); }
+
+/* Card body */
+.card-body { padding: 0.9rem; flex: 1; display: flex; flex-direction: column; gap: 0.55rem; }
+.card-title { font-weight: 600; font-size: 0.88rem; line-height: 1.35; color: var(--ink); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card-prices { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+.p-buy { font-family: var(--mono); font-size: 1.35rem; font-weight: 700; color: var(--ink); letter-spacing: -0.02em; }
+.p-arr { color: var(--ink3); }
+.p-sell { font-family: var(--mono); font-size: 0.88rem; color: var(--green); font-weight: 600; }
+.p-net { font-family: var(--mono); font-size: 0.68rem; color: var(--ink3); }
+.card-reason { font-size: 0.78rem; color: var(--ink2); line-height: 1.5; font-style: italic; padding: 0.45rem 0.6rem; background: var(--bg); border-radius: var(--radius-sm); border-left: 2px solid var(--border2); }
+.card-tags { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.tag { font-size: 0.66rem; font-weight: 500; padding: 0.15rem 0.45rem; border-radius: 3px; background: var(--tag-bg); color: var(--ink2); }
+.tag.typo { background: var(--purple-bg); color: var(--purple); }
+.tag.football { background: var(--green-bg); color: var(--green); }
+.tag.hidden { background: var(--amber-bg); color: var(--amber); }
+.tag.bundle { background: var(--blue-bg); color: var(--blue); }
+.tag.nike { background: #fff0f0; color: #c0392b; }
+.tag.adidas { background: #f0f0ff; color: #2a2aaa; }
+.tag.kids { background: #fff0f8; color: #aa2a6a; }
+.liq-row { display: flex; align-items: center; gap: 0.45rem; }
+.liq-lbl { font-size: 0.7rem; color: var(--ink3); flex-shrink: 0; }
+.liq-track { flex: 1; height: 3px; background: var(--bg); border-radius: 2px; overflow: hidden; }
+.liq-fill { height: 100%; border-radius: 2px; }
+.liq-txt { font-family: var(--mono); font-size: 0.62rem; font-weight: 600; flex-shrink: 0; }
+
+/* Card footer */
+.card-foot { padding: 0.7rem 0.9rem; border-top: 1px solid var(--border); display: flex; gap: 0.45rem; align-items: center; }
+.btn-buy { flex: 1; background: var(--ink); color: var(--white); border: none; border-radius: var(--radius-sm); padding: 0.58rem 0.9rem; font-family: var(--body); font-size: 0.82rem; font-weight: 600; cursor: pointer; text-decoration: none; display: flex; align-items: center; justify-content: center; gap: 0.35rem; transition: opacity 0.15s; }
+.btn-buy:hover { opacity: 0.84; }
+.btn-star { background: transparent; border: 1.5px solid var(--border2); color: var(--ink2); border-radius: var(--radius-sm); padding: 0.58rem 0.7rem; font-size: 0.88rem; cursor: pointer; transition: all 0.15s; }
+.btn-star:hover { border-color: var(--amber); color: var(--amber); }
+.btn-star.on { background: var(--amber-bg); border-color: var(--amber-border); color: var(--amber); }
+.card-timer { font-family: var(--mono); font-size: 0.6rem; color: var(--red); margin-left: auto; }
+
+/* Scan card */
+.scan-card { background: var(--white); border: 1.5px solid var(--border); border-radius: var(--radius); padding: 1.1rem; display: flex; align-items: center; gap: 0.9rem; box-shadow: var(--shadow); grid-column: 1 / -1; }
+.scan-spinner { width: 26px; height: 26px; flex-shrink: 0; border: 2px solid var(--border); border-top-color: var(--ink); border-radius: 50%; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.scan-txt { font-weight: 600; font-size: 0.85rem; margin-bottom: 0.12rem; }
+.scan-sub { font-size: 0.75rem; color: var(--ink3); }
+.scan-prog { height: 3px; background: var(--bg); border-radius: 2px; overflow: hidden; margin-top: 0.5rem; }
+.scan-prog-fill { height: 100%; background: var(--ink); border-radius: 2px; transition: width 0.3s; }
+
+/* Empty */
+.empty-state { grid-column: 1 / -1; text-align: center; padding: 3.5rem 2rem; color: var(--ink3); font-size: 0.88rem; line-height: 2.2; }
+.empty-icon { font-size: 2.2rem; margin-bottom: 0.75rem; display: block; }
+
+/* Overlay */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.25); z-index: 190; display: none; backdrop-filter: blur(2px); }
+.overlay.show { display: block; }
+
+/* Drawers */
+.drawer { position: fixed; right: 0; top: 0; bottom: 0; background: var(--white); border-left: 1px solid var(--border); z-index: 200; transform: translateX(100%); transition: transform 0.28s cubic-bezier(0.16,1,0.3,1); display: flex; flex-direction: column; box-shadow: -4px 0 24px rgba(0,0,0,0.08); }
+.drawer.open { transform: translateX(0); }
+.drawer-watch { width: 310px; }
+.drawer-settings { width: 290px; }
+.dh { padding: 1.1rem 1.1rem 0.9rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.dh-title { font-weight: 700; font-size: 0.95rem; }
+.dh-close { background: none; border: none; font-size: 1.1rem; cursor: pointer; color: var(--ink3); padding: 0.2rem; }
+.dh-close:hover { color: var(--ink); }
+.drawer-body { flex: 1; overflow-y: auto; }
+.d-empty { text-align: center; padding: 2.5rem 1.5rem; color: var(--ink3); font-size: 0.83rem; line-height: 2; }
+.wi { padding: 0.9rem 1.1rem; border-bottom: 1px solid var(--border); }
+.wi-title { font-weight: 600; font-size: 0.83rem; line-height: 1.35; margin-bottom: 0.35rem; }
+.wi-meta { display: flex; justify-content: space-between; align-items: center; }
+.wi-p { font-family: var(--mono); font-size: 0.7rem; color: var(--green); font-weight: 600; }
+.wi-rm { font-size: 0.72rem; color: var(--ink3); cursor: pointer; }
+.wi-rm:hover { color: var(--red); }
+.ds { padding: 1rem 1.1rem; border-bottom: 1px solid var(--border); }
+.ds-label { font-family: var(--mono); font-size: 0.53rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink3); margin-bottom: 0.7rem; }
+.toggle-row { display: flex; align-items: center; justify-content: space-between; font-size: 0.83rem; color: var(--ink); }
+.toggle-sub { font-size: 0.72rem; color: var(--ink3); margin-top: 0.2rem; }
+.tog { width: 34px; height: 19px; background: var(--border2); border-radius: 10px; position: relative; cursor: pointer; transition: background 0.2s; flex-shrink: 0; }
+.tog.on { background: var(--ink); }
+.tog::after { content: ''; position: absolute; width: 13px; height: 13px; background: white; border-radius: 50%; top: 3px; left: 3px; transition: left 0.2s; }
+.tog.on::after { left: 18px; }
+.q-list { display: flex; flex-direction: column; gap: 0.25rem; max-height: 220px; overflow-y: auto; }
+.qi { display: flex; align-items: center; justify-content: space-between; padding: 0.3rem 0.45rem; border-radius: 5px; font-size: 0.76rem; border: 1px solid transparent; }
+.qi.active { background: var(--amber-bg); border-color: var(--amber-border); color: var(--amber); font-weight: 600; }
+.qi.done { color: var(--border2); }
+.qi.pending { color: var(--ink3); }
+.qt { font-size: 0.6rem; padding: 0.08rem 0.3rem; border-radius: 3px; background: var(--tag-bg); color: var(--ink3); }
+
+/* Toast */
+.toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--white); border-radius: var(--radius-sm); padding: 0.7rem 1.2rem; font-size: 0.83rem; font-weight: 500; z-index: 9999; box-shadow: 0 4px 20px rgba(0,0,0,0.2); max-width: calc(100vw - 3rem); text-align: center; animation: toastIn 0.3s ease, toastOut 0.3s ease 3.5s forwards; }
+@keyframes toastIn { from{opacity:0;transform:translateX(-50%) translateY(8px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
+@keyframes toastOut { to{opacity:0;transform:translateX(-50%) translateY(8px)} }
+
+@media (max-width: 480px) {
+  .topbar, .stats-banner, .filters-row, .cards-wrap { padding-left: 1rem; padding-right: 1rem; }
+  .top-deal { margin-left: 1rem; margin-right: 1rem; }
+  .cards-grid { grid-template-columns: 1fr; }
+  .drawer-watch, .drawer-settings { width: 100%; }
+  .scan-status { display: none; }
+}
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<div id="setupScreen">
+  <div class="setup-card">
+    <div class="setup-eyebrow">FlipRadar · UK Clothing Arbitrage</div>
+    <div class="setup-title">Find <em>cheap</em><br>clothing to flip</div>
+    <div class="setup-desc">Enter your proxy URL below. Once your eBay developer account is approved and credentials are added to Render, this pulls live deals automatically.</div>
+    <div class="setup-steps">
+      <div class="setup-step"><div class="step-n">1</div><span>eBay developer approved → copy Client ID &amp; Secret from developer.ebay.com</span></div>
+      <div class="setup-step"><div class="step-n">2</div><span>Add credentials to Render → Environment → Save</span></div>
+      <div class="setup-step"><div class="step-n">3</div><span>Paste your Render URL below and launch</span></div>
+    </div>
+    <label class="setup-label">Your Render Proxy URL</label>
+    <input class="setup-input" id="proxyInput" placeholder="https://flipradar-proxy.onrender.com" value="https://flipradar-proxy.onrender.com">
+    <button class="setup-btn" onclick="launch()">Launch FlipRadar →</button>
+  </div>
+</div>
+
+<div id="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="logo"><div class="logo-dot" id="logoDot"></div>FlipRadar</div>
+      <div class="scan-status" id="scanStatus">Starting...</div>
+    </div>
+    <div class="topbar-right">
+      <button class="tb-btn" id="pauseBtn" onclick="togglePause()">⏸ Pause</button>
+      <button class="tb-btn" id="alertBtn" onclick="toggleAlerts()">🔔 Alerts</button>
+      <button class="tb-icon" onclick="openWatch()" title="Watchlist">★</button>
+      <button class="tb-icon" onclick="openSettings()" title="Settings">⚙</button>
+    </div>
+  </div>
+
+  <div class="stats-banner">
+    <div class="stat-cell"><div class="sc-label">Deals</div><div class="sc-val" id="sDeals">0</div></div>
+    <div class="stat-cell"><div class="sc-label">🔥 Hot</div><div class="sc-val r" id="sHot">0</div></div>
+    <div class="stat-cell"><div class="sc-label">Best Net</div><div class="sc-val g" id="sBest">—</div></div>
+    <div class="stat-cell"><div class="sc-label">Avg ROI</div><div class="sc-val a" id="sAvg">—</div></div>
+    <div class="stat-cell"><div class="sc-label">Scans</div><div class="sc-val" id="sScans">0</div></div>
+    <div class="stat-cell"><div class="sc-label">Watchlist</div><div class="sc-val" id="sWatch">0</div></div>
+  </div>
+
+  <div class="top-deal" id="topDeal" onclick="openTopDeal()">
+    <div class="td-left">
+      <div class="td-eyebrow">🏆 Best Deal Right Now</div>
+      <div class="td-title" id="tdTitle">—</div>
+      <div class="td-sub" id="tdSub">—</div>
+    </div>
+    <div class="td-right">
+      <div class="td-roi" id="tdRoi">—</div>
+      <div class="td-net" id="tdNet">—</div>
+    </div>
+    <div class="td-arr">→</div>
+  </div>
+
+  <div class="filters-row">
+    <div class="filter-tabs">
+      <button class="f-tab on" data-f="all" onclick="setFilter('all')">All deals</button>
+      <button class="f-tab" data-f="hot" onclick="setFilter('hot')">🔥 Hot only</button>
+      <button class="f-tab" data-f="miss" onclick="setFilter('miss')">⌨ Typos</button>
+    </div>
+    <div class="price-wrap">
+      <label>£</label>
+      <input type="number" id="minPrice" value="0" min="0">
+      <span class="price-sep">–</span>
+      <input type="number" id="maxPrice" value="25" min="1">
+    </div>
+  </div>
+
+  <div class="cards-wrap">
+    <div class="cards-grid" id="cardsGrid">
+      <div class="empty-state"><span class="empty-icon">📡</span>Connecting to eBay UK...<br>First deals will appear shortly.</div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" onclick="closeDrawers()"></div>
+
+<div class="drawer drawer-watch" id="watchDrawer">
+  <div class="dh"><div class="dh-title">★ Watchlist</div><button class="dh-close" onclick="closeDrawers()">✕</button></div>
+  <div class="drawer-body" id="watchBody"><div class="d-empty">Star any deal to save it here.<br>Great for comparing before you buy.</div></div>
+</div>
+
+<div class="drawer drawer-settings" id="settingsDrawer">
+  <div class="dh"><div class="dh-title">⚙ Settings</div><button class="dh-close" onclick="closeDrawers()">✕</button></div>
+  <div class="drawer-body">
+    <div class="ds">
+      <div class="ds-label">Fee Deduction</div>
+      <div class="toggle-row"><span>Deduct eBay fees (13%)</span><div class="tog on" id="feeToggle" onclick="toggleFees()"></div></div>
+      <div class="toggle-sub" id="feeNote">Profit shown after eBay's cut</div>
+    </div>
+    <div class="ds">
+      <div class="ds-label">Proxy URL</div>
+      <input class="setup-input" id="proxyEdit" style="margin-bottom:0.5rem">
+      <button class="setup-btn" style="padding:0.58rem;font-size:0.85rem" onclick="saveProxy()">Save &amp; Reconnect</button>
+    </div>
+    <div class="ds">
+      <div class="ds-label">Scan Queue</div>
+      <div class="q-list" id="queueEl"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const EBAY_FEE = 0.13;
+const CAT = { unknown:'Hidden Gem', vintage:'Vintage', football:'Football', bundle:'Bundle', miss:'Typo', nike:'Nike', adidas:'Adidas', kids:'Kids Designer' };
+const GOOD_COND = ['loft find','unworn','bnwt','brand new','never worn','barely worn','immaculate','perfect','mint','excellent','no damage','pristine','hardly worn'];
+const BAD_COND  = ['stain','mark','faded','damage','repair','hole','smell','fault','faulty','as seen','as is','project'];
+
+const QUEUE = [
+  {q:'Descente ski jacket vintage',cat:'unknown',brand:'Descente',label:'Descente Ski',avgSell:75},
+  {q:'Descente jacket 80s 90s',cat:'unknown',brand:'Descente',label:'Descente Vintage',avgSell:70},
+  {q:'Fiorucci vintage top jacket',cat:'unknown',brand:'Fiorucci',label:'Fiorucci Vintage',avgSell:65},
+  {q:'Fiorucci angels jeans denim',cat:'unknown',brand:'Fiorucci',label:'Fiorucci Angels',avgSell:80},
+  {q:'Henri Lloyd jacket vintage',cat:'unknown',brand:'Henri Lloyd',label:'Henri Lloyd',avgSell:55},
+  {q:'Henri Lloyd sailing jacket',cat:'unknown',brand:'Henri Lloyd',label:'Henri Lloyd Sail',avgSell:60},
+  {q:'Starter jacket vintage 90s',cat:'unknown',brand:'Starter',label:'Starter Jacket',avgSell:55},
+  {q:'Donnay track jacket vintage 90s',cat:'unknown',brand:'Donnay',label:'Donnay Vintage',avgSell:28},
+  {q:'Lotto track jacket vintage 90s',cat:'unknown',brand:'Lotto',label:'Lotto Vintage',avgSell:38},
+  {q:'Lotto sport italia jacket retro',cat:'unknown',brand:'Lotto',label:'Lotto Sport Italia',avgSell:42},
+  {q:'Wrangler western shirt vintage',cat:'unknown',brand:'Wrangler',label:'Wrangler Western',avgSell:35},
+  {q:'Wrangler denim jacket vintage',cat:'unknown',brand:'Wrangler',label:'Wrangler Denim',avgSell:40},
+  {q:'Kappa banda jacket vintage',cat:'vintage',brand:'Kappa',label:'Kappa Banda',avgSell:55},
+  {q:'Kappa track top retro 90s',cat:'vintage',brand:'Kappa',label:'Kappa Track',avgSell:45},
+  {q:'Fila vintage track jacket BJ',cat:'vintage',brand:'Fila',label:'Fila BJ Top',avgSell:58},
+  {q:'Ellesse palla jacket vintage',cat:'vintage',brand:'Ellesse',label:'Ellesse Palla',avgSell:50},
+  {q:'Sergio Tacchini track top vintage',cat:'vintage',brand:'Sergio Tacchini',label:'Sergio Tacchini',avgSell:55},
+  {q:'Le Coq Sportif vintage jacket track',cat:'vintage',brand:'Le Coq Sportif',label:'Le Coq Sportif',avgSell:50},
+  {q:'Le Coq Sportif polo shirt vintage',cat:'vintage',brand:'Le Coq Sportif',label:'Le Coq Polo',avgSell:35},
+  {q:'Umbro diamond track top vintage',cat:'vintage',brand:'Umbro',label:'Umbro Diamond',avgSell:55},
+  {q:'Adidas firebird track jacket vintage',cat:'vintage',brand:'Adidas',label:'Adidas Firebird',avgSell:60},
+  {q:'Nike vintage windbreaker jacket 90s',cat:'vintage',brand:'Nike',label:'Nike Windbreaker',avgSell:65},
+  {q:'Helly Hansen vintage fleece jacket',cat:'vintage',brand:'Helly Hansen',label:'Helly Hansen',avgSell:55},
+  {q:'Patagonia fleece pullover vintage',cat:'vintage',brand:'Patagonia',label:'Patagonia Fleece',avgSell:70},
+  {q:'Berghaus fleece vintage jacket',cat:'vintage',brand:'Berghaus',label:'Berghaus Fleece',avgSell:45},
+  {q:'Levi 501 jeans vintage orange tab',cat:'vintage',brand:"Levi's",label:"Levi's 501",avgSell:48},
+  {q:'Levi trucker jacket type 3 vintage',cat:'vintage',brand:"Levi's",label:"Levi's Trucker",avgSell:52},
+  // ── FOOTBALL SHIRTS — obscure clubs & lesser known leagues ──
+  {q:'Coventry City football shirt 1990s',cat:'football',brand:'Football Shirt',label:'Coventry 90s',avgSell:50},
+  {q:'Sheffield Wednesday shirt vintage 90s',cat:'football',brand:'Football Shirt',label:'Sheff Wed 90s',avgSell:48},
+  {q:'Stockport County football shirt',cat:'football',brand:'Football Shirt',label:'Stockport County',avgSell:45},
+  {q:'Wimbledon FC football shirt vintage',cat:'football',brand:'Football Shirt',label:'Wimbledon FC',avgSell:60},
+  {q:'Wrexham AFC football shirt vintage',cat:'football',brand:'Football Shirt',label:'Wrexham Vintage',avgSell:55},
+  {q:'Bradford City football shirt vintage 90s',cat:'football',brand:'Football Shirt',label:'Bradford City 90s',avgSell:45},
+  {q:'Oldham Athletic football shirt vintage',cat:'football',brand:'Football Shirt',label:'Oldham Athletic',avgSell:42},
+  {q:'Charlton Athletic football shirt 90s',cat:'football',brand:'Football Shirt',label:'Charlton 90s',avgSell:45},
+  // Serie A — massive collector demand, sellers usually clueless
+  {q:'Serie A Italian football shirt 90s vintage',cat:'football',brand:'Serie A',label:'Serie A 90s',avgSell:65},
+  {q:'AC Milan shirt vintage 90s away',cat:'football',brand:'Serie A',label:'AC Milan Away 90s',avgSell:70},
+  {q:'Inter Milan shirt vintage 90s away',cat:'football',brand:'Serie A',label:'Inter Milan Away 90s',avgSell:68},
+  {q:'Juventus shirt vintage 90s away kit',cat:'football',brand:'Serie A',label:'Juventus Away 90s',avgSell:65},
+  {q:'Fiorentina football shirt vintage 90s',cat:'football',brand:'Serie A',label:'Fiorentina 90s',avgSell:72},
+  {q:'Lazio football shirt vintage 90s',cat:'football',brand:'Serie A',label:'Lazio 90s',avgSell:65},
+  {q:'Napoli football shirt vintage 90s',cat:'football',brand:'Serie A',label:'Napoli 90s',avgSell:70},
+  {q:'AS Roma football shirt vintage 90s',cat:'football',brand:'Serie A',label:'AS Roma 90s',avgSell:65},
+  {q:'Parma football shirt vintage 90s',cat:'football',brand:'Serie A',label:'Parma 90s',avgSell:75},
+  {q:'Sampdoria football shirt vintage 90s',cat:'football',brand:'Serie A',label:'Sampdoria 90s',avgSell:70},
+  // Bundesliga
+  {q:'Bundesliga German football shirt vintage 90s',cat:'football',brand:'Bundesliga',label:'Bundesliga 90s',avgSell:55},
+  {q:'Borussia Dortmund shirt vintage 90s away',cat:'football',brand:'Bundesliga',label:'BVB Away 90s',avgSell:60},
+  {q:'Werder Bremen football shirt vintage',cat:'football',brand:'Bundesliga',label:'Werder Bremen',avgSell:58},
+  {q:'Bayer Leverkusen football shirt vintage',cat:'football',brand:'Bundesliga',label:'Leverkusen Vintage',avgSell:55},
+  {q:'Schalke football shirt vintage 90s',cat:'football',brand:'Bundesliga',label:'Schalke 90s',avgSell:55},
+  // La Liga
+  {q:'La Liga Spanish football shirt vintage 90s',cat:'football',brand:'La Liga',label:'La Liga 90s',avgSell:58},
+  {q:'Deportivo La Coruna football shirt vintage',cat:'football',brand:'La Liga',label:'Deportivo 90s',avgSell:65},
+  {q:'Real Betis football shirt vintage 90s',cat:'football',brand:'La Liga',label:'Real Betis 90s',avgSell:60},
+  {q:'Athletic Bilbao football shirt vintage',cat:'football',brand:'La Liga',label:'Athletic Bilbao',avgSell:62},
+  {q:'Valencia football shirt vintage 90s',cat:'football',brand:'La Liga',label:'Valencia 90s',avgSell:58},
+  // Other leagues — maximum seller ignorance
+  {q:'Dutch Eredivisie football shirt vintage',cat:'football',brand:'Eredivisie',label:'Eredivisie Vintage',avgSell:55},
+  {q:'Ajax football shirt vintage 90s away',cat:'football',brand:'Eredivisie',label:'Ajax Away 90s',avgSell:65},
+  {q:'PSV Eindhoven football shirt vintage',cat:'football',brand:'Eredivisie',label:'PSV Vintage',avgSell:58},
+  {q:'French Ligue 1 football shirt vintage 90s',cat:'football',brand:'Ligue 1',label:'Ligue 1 90s',avgSell:52},
+  {q:'Marseille football shirt vintage 90s',cat:'football',brand:'Ligue 1',label:'Marseille 90s',avgSell:60},
+  {q:'Portuguese football shirt vintage Benfica Porto',cat:'football',brand:'Primeira Liga',label:'Portuguese Shirt',avgSell:55},
+  {q:'Turkish football shirt vintage Galatasaray',cat:'football',brand:'Turkish League',label:'Turkish Vintage',avgSell:52},
+  {q:'Scottish football shirt vintage 90s Hearts Hibs',cat:'football',brand:'Scottish League',label:'Scottish Vintage',avgSell:48},
+  {q:'African national football shirt vintage',cat:'football',brand:'African Football',label:'African National Shirt',avgSell:60},
+  {q:'Asian football shirt vintage Japan Korea',cat:'football',brand:'Asian Football',label:'Asian Vintage Shirt',avgSell:58},
+  {q:'retro football shirt away kit 1990s',cat:'football',brand:'Football Shirt',label:'Away Kit 90s',avgSell:52},
+  {q:'match worn football shirt vintage',cat:'football',brand:'Football Shirt',label:'Match Worn Vintage',avgSell:70},
+
+  // ── BROADER LEAGUE SEARCHES — maximum seller ignorance ──
+  // South America — incredibly popular with collectors, almost never correctly priced
+  {q:'Brazilian football shirt vintage 90s',cat:'football',brand:'South America',label:'Brazil Club 90s',avgSell:60},
+  {q:'Argentine football shirt vintage 90s',cat:'football',brand:'South America',label:'Argentina Club 90s',avgSell:58},
+  {q:'Colombian football shirt vintage',cat:'football',brand:'South America',label:'Colombian Shirt',avgSell:55},
+  {q:'Chilean football shirt vintage',cat:'football',brand:'South America',label:'Chilean Shirt',avgSell:52},
+  {q:'Bolivian football shirt vintage',cat:'football',brand:'South America',label:'Bolivian Shirt',avgSell:50},
+  {q:'Uruguayan football shirt vintage',cat:'football',brand:'South America',label:'Uruguayan Shirt',avgSell:52},
+  {q:'Peruvian football shirt vintage',cat:'football',brand:'South America',label:'Peruvian Shirt',avgSell:50},
+  {q:'Ecuador football shirt vintage',cat:'football',brand:'South America',label:'Ecuadorian Shirt',avgSell:48},
+
+  // Eastern Europe — hugely undervalued, zero competition
+  {q:'Romanian football shirt vintage',cat:'football',brand:'Eastern Europe',label:'Romanian Vintage',avgSell:55},
+  {q:'Polish football shirt vintage club',cat:'football',brand:'Eastern Europe',label:'Polish Club Shirt',avgSell:50},
+  {q:'Czech football shirt vintage',cat:'football',brand:'Eastern Europe',label:'Czech Vintage',avgSell:52},
+  {q:'Bulgarian football shirt vintage',cat:'football',brand:'Eastern Europe',label:'Bulgarian Vintage',avgSell:50},
+  {q:'Hungarian football shirt vintage',cat:'football',brand:'Eastern Europe',label:'Hungarian Vintage',avgSell:52},
+  {q:'Croatian football shirt vintage',cat:'football',brand:'Eastern Europe',label:'Croatian Vintage',avgSell:55},
+  {q:'Yugoslavian football shirt vintage',cat:'football',brand:'Eastern Europe',label:'Yugoslavia Shirt',avgSell:65},
+  {q:'Soviet Union USSR football shirt vintage',cat:'football',brand:'Eastern Europe',label:'USSR Shirt',avgSell:75},
+  {q:'Russian football shirt vintage club',cat:'football',brand:'Eastern Europe',label:'Russian Club Shirt',avgSell:50},
+
+  // Africa — almost no flippers search this, massive opportunity
+  {q:'African football shirt vintage national',cat:'football',brand:'Africa',label:'African National',avgSell:60},
+  {q:'Nigerian football shirt vintage',cat:'football',brand:'Africa',label:'Nigerian Vintage',avgSell:58},
+  {q:'Cameroon football shirt vintage',cat:'football',brand:'Africa',label:'Cameroon Vintage',avgSell:60},
+  {q:'South Africa football shirt vintage Bafana',cat:'football',brand:'Africa',label:'South Africa Vintage',avgSell:55},
+  {q:'Senegal football shirt vintage',cat:'football',brand:'Africa',label:'Senegal Vintage',avgSell:52},
+  {q:'Ivory Coast football shirt vintage',cat:'football',brand:'Africa',label:'Ivory Coast Vintage',avgSell:52},
+  {q:'Ghana football shirt vintage',cat:'football',brand:'Africa',label:'Ghana Vintage',avgSell:52},
+  {q:'Morocco football shirt vintage',cat:'football',brand:'Africa',label:'Morocco Vintage',avgSell:50},
+
+  // Asia & Middle East
+  {q:'Japanese football shirt vintage J-League',cat:'football',brand:'Asia',label:'J-League Vintage',avgSell:65},
+  {q:'South Korean football shirt vintage K-League',cat:'football',brand:'Asia',label:'K-League Vintage',avgSell:58},
+  {q:'Chinese football shirt vintage',cat:'football',brand:'Asia',label:'Chinese Club Vintage',avgSell:48},
+  {q:'Saudi Arabia football shirt vintage',cat:'football',brand:'Asia',label:'Saudi Vintage',avgSell:50},
+  {q:'UAE football shirt vintage',cat:'football',brand:'Asia',label:'UAE Vintage',avgSell:48},
+
+  // Nordic leagues — cult following among collectors
+  {q:'Norwegian football shirt vintage',cat:'football',brand:'Nordic',label:'Norwegian Vintage',avgSell:52},
+  {q:'Swedish football shirt vintage club',cat:'football',brand:'Nordic',label:'Swedish Club Shirt',avgSell:50},
+  {q:'Danish football shirt vintage',cat:'football',brand:'Nordic',label:'Danish Vintage',avgSell:50},
+  {q:'Finnish football shirt vintage',cat:'football',brand:'Nordic',label:'Finnish Vintage',avgSell:48},
+  {q:'Icelandic football shirt vintage',cat:'football',brand:'Nordic',label:'Icelandic Vintage',avgSell:50},
+
+  // MLS and North America — growing collector market
+  {q:'MLS football shirt vintage 90s early 2000s',cat:'football',brand:'MLS',label:'MLS Vintage',avgSell:55},
+  {q:'NASL football shirt vintage',cat:'football',brand:'MLS',label:'NASL Vintage',avgSell:70},
+  {q:'Mexican football shirt vintage Liga MX',cat:'football',brand:'CONCACAF',label:'Liga MX Vintage',avgSell:55},
+
+  // Vague generalised searches — catch anything a seller has listed badly
+  {q:'foreign football shirt vintage old rare',cat:'football',brand:'Unknown',label:'Foreign Rare Shirt',avgSell:55},
+  {q:'international football shirt vintage national team',cat:'football',brand:'Unknown',label:'Intl National Shirt',avgSell:52},
+  {q:'old football shirt vintage rare colourful',cat:'football',brand:'Unknown',label:'Rare Vintage Shirt',avgSell:50},
+  {q:'football shirt job lot bundle vintage',cat:'bundle',brand:'Bundle',label:'Football Shirt Bundle',avgSell:95},
+
+  // Football misspellings — lesser known leagues
+  {q:'Yugoslaavia football shirt vintage',cat:'miss',brand:'Yugoslavia',label:'⌨ Yugoslaavia',avgSell:65},
+  {q:'Cameroon footbal shirt vintage',cat:'miss',brand:'Cameroon',label:'⌨ Footbal (Cameroon)',avgSell:60},
+  {q:'J-Leage football shirt vintage Japanese',cat:'miss',brand:'J-League',label:'⌨ J-Leage typo',avgSell:65},
+  // Football misspellings
+  {q:'Sampdorria football shirt vintage',cat:'miss',brand:'Sampdoria',label:'⌨ Sampdorria',avgSell:70},
+  {q:'Fiorntina football shirt vintage',cat:'miss',brand:'Fiorentina',label:'⌨ Fiorntina',avgSell:72},
+  {q:'Parme football shirt vintage',cat:'miss',brand:'Parma',label:'⌨ Parme',avgSell:75},
+  {q:'Deportivo La Corunya shirt',cat:'miss',brand:'Deportivo',label:'⌨ Corunya typo',avgSell:65},
+  {q:'Wimbeldon FC football shirt',cat:'miss',brand:'Football Shirt',label:'⌨ Wimbeldon',avgSell:60},
+  {q:'vintage sportswear bundle job lot',cat:'bundle',brand:'Bundle',label:'Sportswear Bundle',avgSell:80},
+  {q:'retro football shirts bundle joblot',cat:'bundle',brand:'Bundle',label:'Football Bundle',avgSell:90},
+  {q:'vintage track jackets bundle lot',cat:'bundle',brand:'Bundle',label:'Track Bundle',avgSell:85},
+  {q:'Desente ski jacket',cat:'miss',brand:'Descente',label:'⌨ Desente',avgSell:75},
+  {q:'Fioruchi vintage top',cat:'miss',brand:'Fiorucci',label:'⌨ Fioruchi',avgSell:65},
+  {q:'Henry Lloyd jacket sailing',cat:'miss',brand:'Henri Lloyd',label:'⌨ Henry Lloyd',avgSell:55},
+  {q:'Donay track jacket vintage',cat:'miss',brand:'Donnay',label:'⌨ Donay',avgSell:28},
+  {q:'Lotto sport itali jacket',cat:'miss',brand:'Lotto',label:'⌨ Lotto Itali',avgSell:40},
+  {q:'Sergio Tachini track jacket',cat:'miss',brand:'Sergio Tacchini',label:'⌨ Tachini',avgSell:55},
+  {q:'Le Coq Sportiff jacket vintage',cat:'miss',brand:'Le Coq Sportif',label:'⌨ Sportiff',avgSell:50},
+  {q:'Helly Hanson fleece jacket',cat:'miss',brand:'Helly Hansen',label:'⌨ Hanson',avgSell:55},
+  {q:'Patogonia fleece vintage',cat:'miss',brand:'Patagonia',label:'⌨ Patogonia',avgSell:70},
+  {q:'Kapa banda jacket vintage',cat:'miss',brand:'Kappa',label:'⌨ Kapa',avgSell:55},
+  {q:'Filla track jacket vintage',cat:'miss',brand:'Fila',label:'⌨ Filla',avgSell:55},
+  {q:'Elesse jacket palla vintage',cat:'miss',brand:'Ellesse',label:'⌨ Elesse',avgSell:50},
+  {q:'Umbro dimond track top',cat:'miss',brand:'Umbro',label:'⌨ Dimond',avgSell:55},
+  {q:'Adiddas firebird track jacket',cat:'miss',brand:'Adidas',label:'⌨ Adiddas',avgSell:60},
+  {q:'Niike windbreaker vintage jacket',cat:'miss',brand:'Nike',label:'⌨ Niike',avgSell:65},
+  {q:'Berghause fleece jacket vintage',cat:'miss',brand:'Berghaus',label:'⌨ Berghause',avgSell:45},
+  {q:'Wrangler westren shirt vintage',cat:'miss',brand:'Wrangler',label:'⌨ Westren',avgSell:35},
+  {q:'Levis orange tab jeans vintage',cat:'miss',brand:"Levi's",label:'⌨ Levis',avgSell:48},
+  {q:'Stater jacket vintage 90s',cat:'miss',brand:'Starter',label:'⌨ Stater',avgSell:55},
+  {q:'old ski jacket vintage 80s colourful',cat:'miss',brand:'Unknown',label:'⌨ Vague ski jacket',avgSell:55},
+  {q:'retro sailing jacket vintage old',cat:'miss',brand:'Henri Lloyd',label:'⌨ Vague sailing',avgSell:50},
+  {q:'vintage sportswear jacket retro old',cat:'miss',brand:'Unknown',label:'⌨ Vague sportswear',avgSell:45},
+
+  // ── NIKE ADULT — specific high-value sub-lines ──
+  {q:'Nike ACG jacket vintage',cat:'nike',brand:'Nike ACG',label:'Nike ACG',avgSell:85},
+  {q:'Nike ACG fleece pullover',cat:'nike',brand:'Nike ACG',label:'Nike ACG Fleece',avgSell:70},
+  {q:'Nike vintage windbreaker half zip',cat:'nike',brand:'Nike',label:'Nike Vintage Half Zip',avgSell:65},
+  {q:'Nike track jacket vintage 90s swoosh',cat:'nike',brand:'Nike',label:'Nike 90s Track',avgSell:55},
+  {q:'Nike Gyakusou jacket running',cat:'nike',brand:'Nike Gyakusou',label:'Nike Gyakusou',avgSell:120},
+  {q:'Nike tech fleece jacket',cat:'nike',brand:'Nike',label:'Nike Tech Fleece',avgSell:55},
+  {q:'Nike Supreme jacket collab',cat:'nike',brand:'Nike x Supreme',label:'Nike x Supreme',avgSell:150},
+  {q:'Nike SB jacket vintage',cat:'nike',brand:'Nike SB',label:'Nike SB Jacket',avgSell:65},
+
+  // ── ADIDAS ADULT — collabs and specific lines ──
+  {q:'Adidas Spezial jacket vintage',cat:'adidas',brand:'Adidas Spezial',label:'Adidas Spezial',avgSell:75},
+  {q:'Adidas Wales Bonner collab',cat:'adidas',brand:'Adidas x Wales Bonner',label:'Adidas x Wales Bonner',avgSell:110},
+  {q:'Adidas vintage trefoil track jacket 80s',cat:'adidas',brand:'Adidas',label:'Adidas Trefoil 80s',avgSell:65},
+  {q:'Adidas vintage windbreaker jacket 80s 90s',cat:'adidas',brand:'Adidas',label:'Adidas Vintage Wind',avgSell:60},
+  {q:'Adidas originals track jacket retro',cat:'adidas',brand:'Adidas',label:'Adidas Originals Track',avgSell:55},
+  {q:'Adidas Humanrace jacket',cat:'adidas',brand:'Adidas Humanrace',label:'Adidas Humanrace',avgSell:90},
+  {q:'Adidas x Palace collab jacket',cat:'adidas',brand:'Adidas x Palace',label:'Adidas x Palace',avgSell:100},
+  {q:'Adidas SPZL jacket Spezial',cat:'adidas',brand:'Adidas SPZL',label:'Adidas SPZL',avgSell:80},
+
+  // ── KIDS DESIGNER — specific ages, parent clearouts ──
+  {q:'Stone Island Junior jacket age 8 9 10 11',cat:'kids',brand:'Stone Island Junior',label:'SI Junior 8-11',avgSell:85},
+  {q:'Stone Island Junior coat boys',cat:'kids',brand:'Stone Island Junior',label:'SI Junior Coat',avgSell:90},
+  {q:'CP Company Junior jacket boys',cat:'kids',brand:'CP Company Junior',label:'CP Company Junior',avgSell:75},
+  {q:'Burberry kids coat jacket age 6 7 8',cat:'kids',brand:'Burberry Kids',label:'Burberry Kids Coat',avgSell:55},
+  {q:'Burberry children jacket boys girls',cat:'kids',brand:'Burberry Kids',label:'Burberry Kids Jacket',avgSell:50},
+  {q:'Armani Junior kids jacket boys',cat:'kids',brand:'Armani Junior',label:'Armani Junior',avgSell:35},
+  {q:'Hugo Boss kids jacket boys age',cat:'kids',brand:'Hugo Boss Kids',label:'Hugo Boss Kids',avgSell:30},
+  {q:'Moncler kids jacket boys age 6 8 10',cat:'kids',brand:'Moncler Kids',label:'Moncler Kids',avgSell:120},
+
+  // ── KIDS FOOTBALL SHIRTS — parents have zero idea of value ──
+  // UK obscure clubs kids
+  {q:'Coventry City kids football shirt vintage boys',cat:'kids',brand:'Kids Football',label:'Kids Coventry 90s',avgSell:35},
+  {q:'Wimbledon FC kids football shirt vintage',cat:'kids',brand:'Kids Football',label:'Kids Wimbledon',avgSell:40},
+  {q:'Sheffield Wednesday kids shirt vintage',cat:'kids',brand:'Kids Football',label:'Kids Sheff Wed',avgSell:35},
+  // Serie A kids — massive opportunity
+  {q:'Parma kids football shirt vintage boys',cat:'kids',brand:'Kids Serie A',label:'Kids Parma',avgSell:45},
+  {q:'Fiorentina kids football shirt vintage',cat:'kids',brand:'Kids Serie A',label:'Kids Fiorentina',avgSell:42},
+  {q:'Sampdoria kids football shirt vintage',cat:'kids',brand:'Kids Serie A',label:'Kids Sampdoria',avgSell:42},
+  {q:'Napoli kids football shirt vintage boys',cat:'kids',brand:'Kids Serie A',label:'Kids Napoli',avgSell:45},
+  {q:'AC Milan kids shirt vintage away boys',cat:'kids',brand:'Kids Serie A',label:'Kids AC Milan Away',avgSell:48},
+  {q:'Lazio kids football shirt vintage',cat:'kids',brand:'Kids Serie A',label:'Kids Lazio',avgSell:42},
+  // Bundesliga kids
+  {q:'Borussia Dortmund kids shirt vintage boys',cat:'kids',brand:'Kids Bundesliga',label:'Kids BVB Vintage',avgSell:40},
+  {q:'Werder Bremen kids football shirt vintage',cat:'kids',brand:'Kids Bundesliga',label:'Kids Werder Bremen',avgSell:38},
+  // La Liga kids
+  {q:'Deportivo La Coruna kids football shirt',cat:'kids',brand:'Kids La Liga',label:'Kids Deportivo',avgSell:42},
+  {q:'Real Betis kids football shirt vintage',cat:'kids',brand:'Kids La Liga',label:'Kids Real Betis',avgSell:38},
+  // Eastern Europe kids — rarest of all
+  {q:'Yugoslav kids football shirt vintage boys',cat:'kids',brand:'Kids Eastern Europe',label:'Kids Yugoslavia',avgSell:45},
+  {q:'Romanian kids football shirt vintage',cat:'kids',brand:'Kids Eastern Europe',label:'Kids Romania',avgSell:38},
+  // South America kids
+  {q:'Brazilian kids football shirt vintage boys',cat:'kids',brand:'Kids South America',label:'Kids Brazil Club',avgSell:38},
+  {q:'Argentine kids football shirt vintage',cat:'kids',brand:'Kids South America',label:'Kids Argentina Club',avgSell:38},
+  // African kids — almost never searched
+  {q:'Nigerian kids football shirt vintage',cat:'kids',brand:'Kids Africa',label:'Kids Nigeria',avgSell:35},
+  {q:'Cameroon kids football shirt vintage',cat:'kids',brand:'Kids Africa',label:'Kids Cameroon',avgSell:35},
+  // Asian kids
+  {q:'Japanese J-League kids football shirt vintage',cat:'kids',brand:'Kids Asia',label:'Kids J-League',avgSell:40},
+  // Vague kids football catch-alls
+  {q:'kids football shirt vintage foreign old boys',cat:'kids',brand:'Kids Football',label:'Kids Foreign Shirt',avgSell:38},
+  {q:'boys football shirt vintage retro old age',cat:'kids',brand:'Kids Football',label:'Boys Vintage Shirt',avgSell:35},
+  {q:'kids football shirt bundle lot vintage boys',cat:'bundle',brand:'Bundle',label:'Kids Football Bundle',avgSell:80},
+
+  // ── KIDS DESIGNER MISSPELLINGS ──
+  {q:'Stone Ilsand junior jacket boys',cat:'miss',brand:'Stone Island Junior',label:'⌨ Stone Ilsand Jr',avgSell:85},
+  {q:'Monclair kids jacket boys',cat:'miss',brand:'Moncler Kids',label:'⌨ Monclair kids',avgSell:120},
+  {q:'CP Compamy junior jacket',cat:'miss',brand:'CP Company Junior',label:'⌨ Compamy Jr',avgSell:75},
+  {q:'Burburry kids jacket children',cat:'miss',brand:'Burberry Kids',label:'⌨ Burburry kids',avgSell:50},
+  {q:'Armani Junor kids jacket',cat:'miss',brand:'Armani Junior',label:'⌨ Armani Junor',avgSell:35},
+  // Kids football shirt misspellings
+  {q:'Parme kids football shirt boys',cat:'miss',brand:'Parma Kids',label:'⌨ Parme kids',avgSell:45},
+  {q:'Fiorntina kids football shirt',cat:'miss',brand:'Fiorentina Kids',label:'⌨ Fiorntina kids',avgSell:42},
+  {q:'Sampdorria kids football shirt',cat:'miss',brand:'Sampdoria Kids',label:'⌨ Sampdorria kids',avgSell:42},
+  {q:'boys footbal shirt vintage old',cat:'miss',brand:'Kids Football',label:'⌨ Footbal boys',avgSell:38},
+
+  // ── NIKE/ADIDAS MISSPELLINGS ──
+  {q:'Nikke ACG jacket vintage',cat:'miss',brand:'Nike ACG',label:'⌨ Nikke ACG',avgSell:85},
+  {q:'Adiddas spezial jacket',cat:'miss',brand:'Adidas Spezial',label:'⌨ Adiddas Spezial',avgSell:75},
+  {q:'Adidas Weles Bonner collab',cat:'miss',brand:'Adidas x Wales Bonner',label:'⌨ Weles Bonner',avgSell:110},
+  {q:'Nike Gyakosou jacket',cat:'miss',brand:'Nike Gyakusou',label:'⌨ Gyakosou typo',avgSell:120},
+];
+
+let PROXY = localStorage.getItem('fr_proxy') || 'https://flipradar-proxy.onrender.com';
+let paused=false, alertsOn=false, feeOn=true, qIdx=0, scanCount=0;
+let allDeals=[], watchlist=JSON.parse(localStorage.getItem('fr_watch')||'[]');
+let activeFilter='all', scanning=false, topDealUrl=null, cdInterval=null;
+
+function launch() {
+  const url = document.getElementById('proxyInput').value.trim().replace(/\/$/,'');
+  if (!url) return;
+  PROXY=url; localStorage.setItem('fr_proxy',url);
+  document.getElementById('setupScreen').style.display='none';
+  document.getElementById('app').style.display='block';
+  init();
+}
+
+function init() { renderQueue(); renderWatchlist(); updateStats(); wakeProxy(); }
+
+// Wake up the Render free tier before scanning — it spins down after inactivity
+async function wakeProxy() {
+  document.getElementById('scanStatus').textContent = 'Waking up server...';
+  let attempts = 0;
+  while (attempts < 10) {
+    try {
+      const res = await fetch(`${PROXY}/health`, { signal: AbortSignal.timeout(10000) });
+      if (res.ok) {
+        document.getElementById('scanStatus').textContent = 'Connected — starting scan...';
+        scheduleScan(500);
+        return;
+      }
+    } catch(e) {
+      attempts++;
+      document.getElementById('scanStatus').textContent = `Waking server... (${attempts * 10}s)`;
+      await sleep(3000);
+    }
+  }
+  scheduleScan(500); // Try anyway after 10 attempts
+}
+
+function togglePause() {
+  paused=!paused;
+  const btn=document.getElementById('pauseBtn'), dot=document.getElementById('logoDot');
+  btn.textContent=paused?'▶ Resume':'⏸ Pause';
+  btn.classList.toggle('warn',paused);
+  dot.className='logo-dot'+(paused?' paused':'');
+  if (!paused&&!scanning) scheduleScan(500);
+  if (paused&&cdInterval) clearInterval(cdInterval);
+}
+
+function toggleAlerts() {
+  alertsOn=!alertsOn;
+  const btn=document.getElementById('alertBtn');
+  btn.classList.toggle('on',alertsOn);
+  btn.textContent=alertsOn?'🔔 Alerts ON':'🔔 Alerts';
+  if (alertsOn) toast('Alerts on — hot deals will notify you');
+}
+
+function toggleFees() {
+  feeOn=!feeOn;
+  document.getElementById('feeToggle').classList.toggle('on',feeOn);
+  document.getElementById('feeNote').textContent=feeOn?"Profit shown after eBay's cut":"Showing gross profit (before fees)";
+  reRender();
+}
+
+function saveProxy() {
+  const url=document.getElementById('proxyEdit').value.trim().replace(/\/$/,'');
+  if (!url) return;
+  PROXY=url; localStorage.setItem('fr_proxy',url);
+  closeDrawers(); toast('Proxy URL updated');
+}
+
+function openWatch() { document.getElementById('watchDrawer').classList.add('open'); document.getElementById('overlay').classList.add('show'); }
+function openSettings() { document.getElementById('proxyEdit').value=PROXY; renderQueue(); document.getElementById('settingsDrawer').classList.add('open'); document.getElementById('overlay').classList.add('show'); }
+function closeDrawers() { ['watchDrawer','settingsDrawer'].forEach(id=>document.getElementById(id).classList.remove('open')); document.getElementById('overlay').classList.remove('show'); }
+function openTopDeal() { if (topDealUrl) window.open(topDealUrl,'_blank'); }
+function setFilter(f) { activeFilter=f; document.querySelectorAll('.f-tab').forEach(el=>el.classList.toggle('on',el.dataset.f===f)); reRender(); }
+
+function renderQueue() {
+  const start=Math.max(0,qIdx-1), items=QUEUE.slice(start,start+8);
+  document.getElementById('queueEl').innerHTML=items.map((item,i)=>{
+    const ri=start+i, state=ri<qIdx?'done':ri===qIdx?'active':'pending';
+    return `<div class="qi ${state}"><span>${item.label}</span><span class="qt">${CAT[item.cat]||item.cat}</span></div>`;
+  }).join('');
+}
+
+async function runScan() {
+  if (paused||scanning) return;
+  scanning=true;
+  const item=QUEUE[qIdx%QUEUE.length];
+  renderQueue();
+  const dot=document.getElementById('logoDot');
+  dot.className='logo-dot scanning';
+  document.getElementById('scanStatus').textContent=`Scanning ${item.label}...`;
+  const progInt=showScanCard(item);
+
+  try {
+    const minP=document.getElementById('minPrice').value||'0';
+    const maxP=document.getElementById('maxPrice').value||'25';
+    const listings=await fetchEbay(item.q,minP,maxP);
+    clearInterval(progInt);
+    const pf=document.getElementById('scanProgFill');
+    if (pf) pf.style.width='100%';
+    await sleep(200);
+    const sc=document.getElementById('activeScanCard');
+    if (sc) sc.remove();
+
+    if (listings&&listings.length>0) {
+      document.querySelector('.empty-state')?.remove();
+      const scored=await scoreListings(listings,item);
+      const seenIds=new Set(allDeals.map(d=>d.id));
+      const newDeals=scored.filter(d=>!seenIds.has(d.id));
+      allDeals.push(...newDeals);
+      if (alertsOn&&newDeals.length>0) {
+        const best=[...newDeals].sort((a,b)=>parseFloat(roi(b))-parseFloat(roi(a)))[0];
+        if (best&&best.tier==='hot') toast(`🔥 ${best.title} — Buy £${best.price}, net +£${netProfit(best).toFixed(0)}`);
+      }
+      capDeals(); reRender();
+    }
+
+    scanCount++; qIdx++; updateStats();
+    dot.className='logo-dot';
+    let cd=22;
+    document.getElementById('scanStatus').textContent=`Next scan in ${cd}s · ${allDeals.length} deals`;
+    if (cdInterval) clearInterval(cdInterval);
+    cdInterval=setInterval(()=>{
+      cd--;
+      if (cd<=0||paused){clearInterval(cdInterval);return;}
+      document.getElementById('scanStatus').textContent=`Next scan in ${cd}s · ${allDeals.length} deals`;
+    },1000);
+
+  } catch(e) {
+    clearInterval(progInt);
+    document.getElementById('activeScanCard')?.remove();
+    dot.className='logo-dot';
+    if (scanCount===0&&allDeals.length===0) {
+      document.getElementById('cardsGrid').innerHTML=`<div class="empty-state"><span class="empty-icon">⚠️</span>Couldn't connect to your proxy.<br><br>Check Render is running at:<br><strong>${PROXY}/health</strong><br><br>Add eBay credentials to Render to activate live deals.</div>`;
+    }
+    document.getElementById('scanStatus').textContent='Connection error — retrying';
+  }
+  scanning=false; scheduleScan(22000);
+}
+
+function scheduleScan(delay) { if (!paused) setTimeout(runScan,delay); }
+
+function showScanCard(item) {
+  document.getElementById('activeScanCard')?.remove();
+  const card=document.createElement('div');
+  card.className='scan-card'; card.id='activeScanCard';
+  card.innerHTML=`<div class="scan-spinner"></div><div style="flex:1"><div class="scan-txt">Scanning "${item.label}"</div><div class="scan-sub">eBay UK · £${document.getElementById('minPrice').value}–£${document.getElementById('maxPrice').value} · AI scoring each listing</div><div class="scan-prog"><div class="scan-prog-fill" id="scanProgFill" style="width:0%"></div></div></div>`;
+  document.getElementById('cardsGrid').insertBefore(card,document.getElementById('cardsGrid').firstChild);
+  let prog=0;
+  return setInterval(()=>{prog=Math.min(85,prog+Math.random()*12);const el=document.getElementById('scanProgFill');if(el)el.style.width=prog+'%';},320);
+}
+
+async function fetchEbay(query,minPrice,maxPrice) {
+  const params=new URLSearchParams({q:query,minPrice,maxPrice});
+  const res=await fetch(`${PROXY}/search?${params}`, { signal: AbortSignal.timeout(60000) });
+  if (!res.ok) throw new Error(`Proxy ${res.status}`);
+  const data=await res.json();
+  if (data.error) throw new Error(data.error);
+  return (data.itemSummaries||[]).slice(0,12);
+}
+
+async function scoreListings(listings,item) {
+  const listingData=listings.map(l=>({
+    id:l.itemId, title:l.title, price:parseFloat(l.price?.value||0),
+    condition:l.condition, image:l.image?.imageUrl||null, url:l.itemWebUrl, endDate:l.itemEndDate||null,
+  })).filter(l=>l.price>0);
+  if (!listingData.length) return [];
+
+  const res=await fetch('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      model:'claude-sonnet-4-20250514', max_tokens:1200,
+      system:'You are a UK clothing resale expert. Score eBay listings for flip potential. Respond ONLY with a valid JSON array, no markdown.',
+      messages:[{role:'user',content:`Score these real eBay UK listings for flip potential.
+Category: ${CAT[item.cat]||item.cat}, Brand: ${item.brand}, typical UK resale value: £${item.avgSell}.
+
+CONDITION — critical for scoring:
+BOOST if title contains: ${GOOD_COND.slice(0,8).join(', ')}
+PENALISE if title contains: ${BAD_COND.slice(0,8).join(', ')}
+"Used" label alone is meaningless — focus entirely on title language.
+
+CATEGORIES:
+- Hidden Gem: Descente, Fiorucci, Henri Lloyd, Starter, Donnay, Lotto, Wrangler — sellers almost never know value
+- Vintage: Kappa, Fila, Ellesse, Tacchini, Le Coq, Umbro, Helly Hansen, Patagonia — some know, many don't
+- Football: the further from the top 5 leagues the better. Eastern European (Yugoslavia, USSR, Romania, Bulgaria, Hungary), South American (Brazil clubs, Argentina clubs, Colombia, Bolivia), African (Nigeria, Cameroon, Senegal, Ghana), Asian (J-League, K-League), Nordic, and MLS vintage shirts are almost never correctly priced by UK sellers. A USSR shirt listed for £6 can sell for £75. Score these very aggressively — sellers listing these as "old football shirt" have almost zero knowledge of collector value. Foreign shirts with unusual colours or designs score highest.
+- Bundle: score on total if split and sold individually
+- Typo: misspelled brand = near zero competition from other buyers
+- Nike: focus on sub-lines — ACG, Gyakusou, vintage swoosh, collabs. Generic "Nike jacket" is worthless, specific sub-lines are gold
+- Adidas: focus on Spezial, Wales Bonner, Humanrace, Palace collab, vintage trefoil. Generic Adidas is fine, collabs are excellent
+- Kids Designer: parents clearing wardrobes with zero knowledge of value. Stone Island Junior, CP Company Junior, Moncler Kids are the big ones. Also kids football shirts — a parent selling a kids Parma or Sampdoria shirt from 1995 as "old football top age 8" for £3 has absolutely no idea it can sell for £40-50. Score kids foreign football shirts very aggressively — near zero competition in this niche.
+
+Return for each listing:
+- id (same as input)
+- tier: "hot" (>80% ROI), "great" (50-80%), "good" (30-50%), "skip" (<30% or likely damaged)
+- estSellPrice: realistic Depop/eBay UK resale value now
+- reason: one short sentence — what's the flip opportunity? Mention condition signals if present.
+- liquidity: 1-10 (how fast it sells in UK)
+- condFlag: "great" if positive condition signals in title, "warn" if negative signals, "ok" otherwise
+
+Only return items where tier is NOT "skip".
+
+Listings: ${JSON.stringify(listingData)}
+
+Return ONLY the JSON array.`}]
+    })
+  });
+  const data=await res.json();
+  const text=data.content.map(b=>b.text||'').join('');
+  const clean=text.replace(/\`\`\`json|\`\`\`/g,'').trim();
+  const scored=JSON.parse(clean);
+  const seenIds=new Set(allDeals.map(d=>d.id));
+  return scored.map(s=>{
+    const orig=listingData.find(l=>l.id===s.id);
+    if (!orig||seenIds.has(orig.id)) return null;
+    return {...orig,...s,cat:item.cat,brand:item.brand,avgSell:item.avgSell};
+  }).filter(Boolean);
+}
+
+function netProfit(deal) { const sell=deal.estSellPrice||deal.avgSell; return feeOn?(sell*(1-EBAY_FEE))-deal.price:sell-deal.price; }
+function roi(deal) { return (netProfit(deal)/deal.price*100).toFixed(0); }
+
+function shouldShow(deal) {
+  if (deal.tier==='skip') return false;
+  if (activeFilter==='all') return true;
+  if (activeFilter==='hot') return deal.tier==='hot';
+  if (activeFilter==='miss') return deal.cat==='miss';
+  return false;
+}
+
+function sortedDeals() { return [...allDeals].filter(shouldShow).sort((a,b)=>parseFloat(roi(b))-parseFloat(roi(a))); }
+
+function capDeals() {
+  if (allDeals.length>200) allDeals=[...allDeals].sort((a,b)=>parseFloat(roi(b))-parseFloat(roi(a))).slice(0,150);
+}
+
+function reRender() {
+  const grid=document.getElementById('cardsGrid');
+  const sc=document.getElementById('activeScanCard');
+  grid.innerHTML='';
+  if (sc) grid.appendChild(sc);
+  const visible=sortedDeals();
+  if (!visible.length&&!sc){grid.innerHTML='<div class="empty-state"><span class="empty-icon">🔍</span>No deals match this filter yet.<br>Try "All deals" or wait for the next scan.</div>';return;}
+  visible.slice(0,60).forEach(d=>grid.appendChild(buildCard(d)));
+}
+
+function buildCard(deal) {
+  const net=netProfit(deal), roiPct=roi(deal), sell=deal.estSellPrice||deal.avgSell;
+  const liq=deal.liquidity||5;
+  const liqColor=liq>=8?'var(--green)':liq>=5?'var(--amber)':'var(--red)';
+  const liqLabel=liq>=8?'Sells fast':liq>=5?'Moderate':'Slow';
+  const isWatched=watchlist.some(w=>w.id===deal.id);
+  const catTagClass=deal.cat==='miss'?'typo':deal.cat==='football'?'football':deal.cat==='unknown'?'hidden':deal.cat==='bundle'?'bundle':deal.cat==='nike'?'nike':deal.cat==='adidas'?'adidas':deal.cat==='kids'?'kids':'';
+  const catIcon=deal.cat==='football'?'⚽':deal.cat==='bundle'?'📦':deal.cat==='kids'?'👶':deal.cat==='nike'?'👟':deal.cat==='adidas'?'👟':'👕';
+
+  let timerHtml='';
+  if (deal.endDate){const diff=new Date(deal.endDate)-new Date();if(diff>0&&diff<172800000){const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000);timerHtml=`<span class="card-timer">⏱ ${h>0?h+'h ':''}${m}m left</span>`;}}
+
+  const card=document.createElement('div');
+  card.className=`deal-card ${deal.tier}`;
+  card.innerHTML=`
+    <div class="card-img-wrap">
+      ${deal.image?`<img class="card-img" src="${esc(deal.image)}" alt="" loading="lazy" onerror="this.parentElement.innerHTML='<div class=\\'card-img-ph\\'>${catIcon}</div>'">`:`<div class="card-img-ph">${catIcon}</div>`}
+      <div class="roi-badge ${deal.tier}">+${roiPct}% ROI</div>
+      ${deal.condFlag==='great'?'<div class="cond-flag gc">✓ Great condition</div>':deal.condFlag==='warn'?'<div class="cond-flag wc">⚠ Check condition</div>':''}
+    </div>
+    <div class="card-body">
+      <div class="card-title">${esc(deal.title)}</div>
+      <div class="card-prices">
+        <span class="p-buy">£${deal.price?.toFixed(0)}</span>
+        <span class="p-arr">→</span>
+        <span class="p-sell">~£${sell}</span>
+        <span class="p-net">(+£${net.toFixed(0)} net)</span>
+      </div>
+      <div class="card-reason">${esc(deal.reason||'')}</div>
+      <div class="card-tags">
+        <span class="tag ${catTagClass}">${CAT[deal.cat]||deal.cat}</span>
+        <span class="tag">${esc(deal.condition||'Used')}</span>
+        ${feeOn?'<span class="tag">After fees</span>':''}
+      </div>
+      <div class="liq-row">
+        <span class="liq-lbl">Sell speed</span>
+        <div class="liq-track"><div class="liq-fill" style="width:${liq*10}%;background:${liqColor}"></div></div>
+        <span class="liq-txt" style="color:${liqColor}">${liqLabel}</span>
+      </div>
+    </div>
+    <div class="card-foot">
+      <a class="btn-buy" href="${esc(deal.url)}" target="_blank" rel="noopener">View on eBay →</a>
+      <button class="btn-star ${isWatched?'on':''}" onclick="toggleWatch('${esc(deal.id)}','${esc(deal.title).replace(/'/g,"\\'")}',${deal.price?.toFixed(0)},${net.toFixed(0)},this)">${isWatched?'★':'☆'}</button>
+      ${timerHtml}
+    </div>`;
+  return card;
+}
+
+function toggleWatch(id,title,price,net,btn) {
+  const idx=watchlist.findIndex(w=>w.id===id);
+  if (idx>-1){watchlist.splice(idx,1);btn.textContent='☆';btn.classList.remove('on');}
+  else {watchlist.unshift({id,title,price,net});btn.textContent='★';btn.classList.add('on');}
+  localStorage.setItem('fr_watch',JSON.stringify(watchlist));
+  renderWatchlist(); updateStats();
+}
+
+function renderWatchlist() {
+  const el=document.getElementById('watchBody');
+  if (!watchlist.length){el.innerHTML='<div class="d-empty">Star any deal to save it here.<br>Great for comparing before you buy.</div>';return;}
+  el.innerHTML=watchlist.map((w,i)=>`<div class="wi"><div class="wi-title">${esc(w.title)}</div><div class="wi-meta"><span class="wi-p">Buy £${w.price} · Net +£${w.net}</span><span class="wi-rm" onclick="removeWatch(${i})">Remove</span></div></div>`).join('');
+}
+
+function removeWatch(i) { watchlist.splice(i,1); localStorage.setItem('fr_watch',JSON.stringify(watchlist)); renderWatchlist(); updateStats(); }
+
+function updateStats() {
+  document.getElementById('sDeals').textContent=allDeals.length;
+  document.getElementById('sScans').textContent=scanCount;
+  document.getElementById('sHot').textContent=allDeals.filter(d=>d.tier==='hot').length;
+  document.getElementById('sWatch').textContent=watchlist.length;
+  if (allDeals.length) {
+    const sorted=sortedDeals(), nets=allDeals.map(d=>netProfit(d)), rois=allDeals.map(d=>parseFloat(roi(d)));
+    document.getElementById('sBest').textContent='£'+Math.max(...nets).toFixed(0);
+    document.getElementById('sAvg').textContent=Math.round(rois.reduce((a,b)=>a+b,0)/rois.length)+'%';
+    if (sorted.length>0) {
+      const best=sorted[0], sell=best.estSellPrice||best.avgSell;
+      const banner=document.getElementById('topDeal');
+      banner.style.display='flex';
+      document.getElementById('tdTitle').textContent=best.title;
+      document.getElementById('tdSub').textContent=`Buy £${best.price} · Sell ~£${sell} · ${CAT[best.cat]||best.cat}`;
+      document.getElementById('tdRoi').textContent=roi(best)+'%';
+      document.getElementById('tdNet').textContent=`+£${netProfit(best).toFixed(0)} net profit`;
+      topDealUrl=best.url;
+    }
+  }
+}
+
+function toast(msg) { const t=document.createElement('div'); t.className='toast'; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(),4200); }
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function sleep(ms) { return new Promise(r=>setTimeout(r,ms)); }
+</script>
+</body>
+</html>
