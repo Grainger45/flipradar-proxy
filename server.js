@@ -217,9 +217,75 @@ async function getMarketPrices(query, token) {
   } catch (e) { return null; }
 }
 
-// Get REAL Vinted UK prices — disabled until Apify permissions resolved
+// Get REAL Vinted UK prices via Apify Vinted Smart Scraper (kazkn)
+const APIFY_KEY = process.env.APIFY_API_KEY;
+const vintedPriceCache = new Map();
+
 async function getRealVintedPrices(query) {
-  return null;
+  if (!APIFY_KEY) return null;
+
+  const cacheKey = query.toLowerCase().trim();
+  const cached = vintedPriceCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 30 * 60 * 1000) return cached.data;
+
+  try {
+    const res = await fetch(
+      'https://api.apify.com/v2/acts/kazkn~vinted-smart-scraper/run-sync-get-dataset-items?token=' + APIFY_KEY + '&timeout=60&memory=256',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'SEARCH',
+          query: query,
+          countries: ['gb'],
+          maxItems: 30
+        }),
+        signal: AbortSignal.timeout(65000)
+      }
+    );
+
+    if (!res.ok) {
+      console.log('Apify error ' + res.status + ' for "' + query + '"');
+      return null;
+    }
+
+    const items = await res.json();
+    if (!Array.isArray(items) || items.length < 3) {
+      console.log('Apify: insufficient results for "' + query + '" (' + (items?.length || 0) + ')');
+      return null;
+    }
+
+    const prices = items
+      .map(i => {
+        const p = i.price || i.priceNumeric || i.price_numeric || 0;
+        return typeof p === 'string' ? parseFloat(p.replace(/[^0-9.]/g, '')) : parseFloat(p);
+      })
+      .filter(p => p > 1 && p < 200)
+      .sort((a, b) => a - b);
+
+    if (prices.length < 3) return null;
+
+    const trimmed = prices.slice(Math.floor(prices.length * 0.2), Math.ceil(prices.length * 0.8));
+    const median = trimmed[Math.floor(trimmed.length / 2)];
+    const avg = Math.round(trimmed.reduce((a, b) => a + b, 0) / trimmed.length);
+
+    const result = {
+      median: Math.round(median * 100) / 100,
+      avg,
+      low: trimmed[0],
+      high: trimmed[trimmed.length - 1],
+      sampleSize: prices.length,
+      isReal: true
+    };
+
+    vintedPriceCache.set(cacheKey, { data: result, ts: Date.now() });
+    console.log('Apify Vinted "' + query + '": median £' + result.median + ' (' + result.sampleSize + ' listings)');
+    return result;
+
+  } catch (e) {
+    console.log('Apify timeout/error for "' + query + '":', e.message);
+    return null;
+  }
 }
 
 // Get Vinted price range from our manual research data (fallback)
