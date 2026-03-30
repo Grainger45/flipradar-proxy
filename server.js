@@ -269,8 +269,30 @@ async function getSoldPrices(query, token) {
 // ── CLAUDE APPEAL SCORING ──
 // Scores every deal for desirability and condition before alerting.
 // Only items scoring 7/10+ on both appeal AND condition reach your inbox.
+// ── CLAUDE APPEAL SCORE CACHE ──
+// Cache scores for 24 hours — similar items in same category score the same
+const appealCache = new Map();
+
+function getAppealCacheKey(title, brand, cat) {
+  // Normalise title to catch near-duplicates — strip size/colour specifics
+  const normalised = title.toLowerCase()
+    .replace(/\b(xs|s|m|l|xl|xxl|uk\s?\d+|size\s?\d+|\d+\s?years?)\b/gi, '')
+    .replace(/\b(white|black|grey|gray|blue|red|green|navy|brown|beige|cream)\b/gi, '')
+    .replace(/[^a-z\s]/g, '')
+    .trim()
+    .substring(0, 40);
+  return brand + '|' + cat + '|' + normalised;
+}
+
 async function scoreAppeal(title, brand, cat, condition, price) {
   if (!ANTHROPIC_KEY) return null;
+
+  // Check cache first
+  const cacheKey = getAppealCacheKey(title, brand, cat);
+  const cached = appealCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) {
+    return cached.data;
+  }
 
   try {
     const prompt = `You are an expert UK secondhand clothing reseller specialising in Vinted. 
@@ -315,6 +337,9 @@ Respond with ONLY this JSON, nothing else:
     const parsed = JSON.parse(clean);
 
     if (typeof parsed.appeal !== 'number' || typeof parsed.condition !== 'number') return null;
+
+    // Cache the result for 24 hours
+    appealCache.set(cacheKey, { data: parsed, ts: Date.now() });
     return parsed;
   } catch (e) {
     return null;
@@ -649,13 +674,13 @@ async function runScan() {
       if (!candidates.length) continue;
 
       // ── CLAUDE APPEAL SCORING ──
-      // Only score Must Buy candidates — saves API costs on 30min scan cycle
+      // Only score Must Buy candidates with ROI 150%+ — saves API costs
       for (const deal of candidates) {
-        // Strong deals skip Claude and go straight through — only Must Buy gets scored
-        if (deal.confidenceTier === 'strong') {
+        // Strong deals or low ROI Must Buys skip Claude and go straight through
+        if (deal.confidenceTier === 'strong' || deal.roi < 150) {
           alertDeals.push(deal);
           alertedIds.add(deal.id);
-          console.log('[STRONG] ' + deal.title.substring(0, 50) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ')');
+          console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 50) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ')');
           continue;
         }
 
@@ -718,10 +743,10 @@ async function runScan() {
   if (alertedIds.size > 800) alertedIds.clear();
 }
 
-// ── SCHEDULE: Every 30 minutes ──
+// ── SCHEDULE: Every 60 minutes ──
 async function scheduledScan() {
   await runScan();
-  setTimeout(scheduledScan, 30 * 60 * 1000);
+  setTimeout(scheduledScan, 60 * 60 * 1000);
 }
 
 // ── ENDPOINTS ──
