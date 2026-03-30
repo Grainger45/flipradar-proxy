@@ -18,10 +18,11 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const SENDGRID_KEY = process.env.SENDGRID_API_KEY;
 const ALERT_EMAIL = process.env.ALERT_EMAIL;
 const POSTAGE = 3.50;
-const MIN_NET_PROFIT = 15; // Raised from £10 — cuts out marginal deals
-const MAX_BUY_PRICE = 10;
-const MUST_BUY_RATIO = 0.38; // Stricter — below 38% of market median
-const STRONG_RATIO = 0.55;   // Stricter — below 55%
+const MIN_NET_PROFIT = 15;
+const MAX_BUY_PRICE = 20; // Compromise — £20 max, but only alerts when ROI > 100%
+const MUST_BUY_RATIO = 0.40; // Below 40% of market median = Must Buy
+const STRONG_RATIO = 0.55;   // Below 55% = Strong
+const MIN_ROI = 100; // Must make at least 100% return on buy price (e.g. buy £10, profit £10+)
 
 // ── DEFINITIVE SEARCH QUEUE ──
 // Built from real Vinted UK 2026 sell-through data and seller ignorance patterns
@@ -375,7 +376,9 @@ function scoreDeal(item, marketData, queueItem, soldData) {
 
   const vintedNet = vintedSellPrice - price - POSTAGE;
   const itemMinProfit = queueItem.minProfit || MIN_NET_PROFIT;
+  const roi = Math.round((vintedNet / price) * 100);
   if (vintedNet < itemMinProfit) return null;
+  if (roi < MIN_ROI) return null; // Must at least double your money
 
   // ── CONFIDENCE TIER ──
   let confidenceTier = 'possible';
@@ -426,7 +429,6 @@ function scoreDeal(item, marketData, queueItem, soldData) {
   if (queueItem.cat === 'typo') { confidenceScore = Math.min(99, confidenceScore + 5); confidenceReasons.push('Misspelled title — zero competition'); }
   if (titleLower.includes('loft find') || titleLower.includes('house clearance')) { confidenceScore = Math.min(99, confidenceScore + 5); confidenceReasons.push('Seller likely unaware of value'); }
 
-  const roi = Math.round((vintedNet / price) * 100);
   const vintedTitle = generateVintedTitle(title, queueItem.brand, queueItem.cat);
 
   return {
