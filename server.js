@@ -229,17 +229,16 @@ async function getRealVintedPrices(query) {
   if (cached && Date.now() - cached.ts < 30 * 60 * 1000) return cached.data;
 
   try {
-    // Use synchronous endpoint — runs and returns results in one call
+    // Use synchronous endpoint — confirmed input format from Apify docs
     const res = await fetch(
-      'https://api.apify.com/v2/acts/louisdeconinck~vinted-scraper/run-sync-get-dataset-items?token=' + APIFY_KEY + '&timeout=30',
+      'https://api.apify.com/v2/acts/louisdeconinck~vinted-scraper/run-sync-get-dataset-items?token=' + APIFY_KEY + '&timeout=30&memory=256',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           startUrls: [{
             url: 'https://www.vinted.co.uk/catalog?search_text=' + encodeURIComponent(query) + '&order=relevance&currency=GBP'
-          }],
-          maxItems: 30
+          }]
         }),
         signal: AbortSignal.timeout(35000)
       }
