@@ -217,12 +217,8 @@ async function getMarketPrices(query, token) {
   } catch (e) { return null; }
 }
 
-// Get REAL Vinted UK prices via Apify scraper
-const APIFY_KEY = process.env.APIFY_API_KEY;
-const vintedPriceCache = new Map();
-
+// Get REAL Vinted UK prices — disabled until Apify permissions resolved
 async function getRealVintedPrices(query) {
-  // Apify integration temporarily disabled — bot runs on eBay market data + manual ranges
   return null;
 }
 
