@@ -222,11 +222,9 @@ const APIFY_KEY = process.env.APIFY_API_KEY;
 const vintedPriceCache = new Map();
 
 async function getRealVintedPrices(query) {
-  if (!APIFY_KEY) return null;
-
-  const cacheKey = query.toLowerCase().trim();
-  const cached = vintedPriceCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < 30 * 60 * 1000) return cached.data;
+  // Apify integration temporarily disabled — bot runs on eBay market data + manual ranges
+  return null;
+}
 
   try {
     // Use Authorization header — more reliable than query param
