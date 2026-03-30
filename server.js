@@ -656,8 +656,16 @@ async function runScan() {
       if (!candidates.length) continue;
 
       // ── CLAUDE APPEAL SCORING ──
-      // Only run Claude on candidates that passed price scoring — saves API calls
+      // Only score Must Buy candidates — saves API costs on 30min scan cycle
       for (const deal of candidates) {
+        // Strong deals skip Claude and go straight through — only Must Buy gets scored
+        if (deal.confidenceTier === 'strong') {
+          alertDeals.push(deal);
+          alertedIds.add(deal.id);
+          console.log('[STRONG] ' + deal.title.substring(0, 50) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ')');
+          continue;
+        }
+
         try {
           const appeal = await scoreAppeal(deal.title, deal.brand, deal.cat, deal.condition, deal.price);
 
@@ -717,10 +725,10 @@ async function runScan() {
   if (alertedIds.size > 800) alertedIds.clear();
 }
 
-// ── SCHEDULE: Every 4 hours ──
+// ── SCHEDULE: Every 30 minutes ──
 async function scheduledScan() {
   await runScan();
-  setTimeout(scheduledScan, 4 * 60 * 60 * 1000);
+  setTimeout(scheduledScan, 30 * 60 * 1000);
 }
 
 // ── ENDPOINTS ──
