@@ -18,10 +18,10 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const SENDGRID_KEY = process.env.SENDGRID_API_KEY;
 const ALERT_EMAIL = process.env.ALERT_EMAIL;
 const POSTAGE = 3.50;
-const MIN_NET_PROFIT = 10;
-const MAX_BUY_PRICE = 10; // Low buy price = low risk, better margin cushion
-const MUST_BUY_RATIO = 0.40; // Below 40% of market median = Must Buy
-const STRONG_RATIO = 0.60;   // Below 60% = Strong
+const MIN_NET_PROFIT = 15; // Raised from £10 — cuts out marginal deals
+const MAX_BUY_PRICE = 10;
+const MUST_BUY_RATIO = 0.38; // Stricter — below 38% of market median
+const STRONG_RATIO = 0.55;   // Stricter — below 55%
 
 // ── DEFINITIVE SEARCH QUEUE ──
 // Built from real Vinted UK 2026 sell-through data and seller ignorance patterns
@@ -572,21 +572,23 @@ async function runScan() {
   console.log('Scan complete — ' + alertDeals.length + ' deals (' + mustBuyCount + ' Must Buy)');
 
   if (alertDeals.length > 0) {
-    alertDeals.sort((a, b) => {
-      if (a.confidenceTier === 'mustbuy' && b.confidenceTier !== 'mustbuy') return -1;
-      if (b.confidenceTier === 'mustbuy' && a.confidenceTier !== 'mustbuy') return 1;
-      return b.confidenceScore - a.confidenceScore;
-    });
-    await sendAlert(alertDeals.slice(0, 12));
+    // Only email Must Buy — Strong deals are discarded to reduce noise
+    const mustBuysOnly = alertDeals.filter(d => d.confidenceTier === 'mustbuy');
+    if (mustBuysOnly.length > 0) {
+      mustBuysOnly.sort((a, b) => b.confidenceScore - a.confidenceScore);
+      await sendAlert(mustBuysOnly.slice(0, 5)); // Max 5 per email
+    } else {
+      console.log('No Must Buy deals this scan — skipping email');
+    }
   }
 
   if (alertedIds.size > 800) alertedIds.clear();
 }
 
-// ── SCHEDULE: Every 2 hours ──
+// ── SCHEDULE: Every 4 hours ──
 async function scheduledScan() {
   await runScan();
-  setTimeout(scheduledScan, 2 * 60 * 60 * 1000);
+  setTimeout(scheduledScan, 4 * 60 * 60 * 1000);
 }
 
 // ── ENDPOINTS ──
