@@ -219,97 +219,73 @@ async function getMarketPrices(query, token) {
 
 // Get REAL Vinted UK prices via Apify scraper
 const APIFY_KEY = process.env.APIFY_API_KEY;
-const vintedPriceCache = new Map(); // Cache results for 30 mins to save credits
+const vintedPriceCache = new Map();
 
 async function getRealVintedPrices(query) {
   if (!APIFY_KEY) return null;
 
-  // Check cache first
   const cacheKey = query.toLowerCase().trim();
   const cached = vintedPriceCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < 30 * 60 * 1000) return cached.data;
 
   try {
-    // Start Apify actor run — using the Vinted Smart Scraper
-    const runRes = await fetch('https://api.apify.com/v2/acts/kazkn~vinted-smart-scraper/runs', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + APIFY_KEY
-      },
-      body: JSON.stringify({
-        mode: 'SEARCH',
-        query: query,
-        countries: ['gb'],
-        maxItems: 30,
-        priceMax: 150
-      }),
-      signal: AbortSignal.timeout(8000)
-    });
+    // Use synchronous endpoint — runs and returns results in one call
+    const res = await fetch(
+      'https://api.apify.com/v2/acts/louisdeconinck~vinted-scraper/run-sync-get-dataset-items?token=' + APIFY_KEY + '&timeout=30',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startUrls: [{
+            url: 'https://www.vinted.co.uk/catalog?search_text=' + encodeURIComponent(query) + '&order=relevance&currency=GBP'
+          }],
+          maxItems: 30
+        }),
+        signal: AbortSignal.timeout(35000)
+      }
+    );
 
-    if (!runRes.ok) {
-      console.log('Apify run start failed:', runRes.status);
+    if (!res.ok) {
+      console.log('Apify error ' + res.status + ' for "' + query + '"');
       return null;
     }
 
-    const runData = await runRes.json();
-    const runId = runData.data?.id;
-    if (!runId) return null;
-
-    // Poll for results — max 25 seconds
-    let attempts = 0;
-    while (attempts < 5) {
-      await new Promise(r => setTimeout(r, 5000));
-      attempts++;
-
-      const statusRes = await fetch(
-        'https://api.apify.com/v2/actor-runs/' + runId + '/dataset/items?token=' + APIFY_KEY,
-        { signal: AbortSignal.timeout(8000) }
-      );
-
-      if (!statusRes.ok) continue;
-      const items = await statusRes.json();
-
-      if (items && items.length >= 3) {
-        // Extract prices from real Vinted listings
-        const prices = items
-          .map(i => {
-            const raw = i.price || i.priceNumeric || 0;
-            return typeof raw === 'string' ? parseFloat(raw.replace(/[^0-9.]/g, '')) : parseFloat(raw);
-          })
-          .filter(p => p > 1 && p < 200)
-          .sort((a, b) => a - b);
-
-        if (prices.length < 3) continue;
-
-        // Remove top and bottom outliers
-        const trimmed = prices.slice(
-          Math.floor(prices.length * 0.2),
-          Math.ceil(prices.length * 0.8)
-        );
-
-        const median = trimmed[Math.floor(trimmed.length / 2)];
-        const avg = Math.round(trimmed.reduce((a, b) => a + b, 0) / trimmed.length);
-
-        const result = {
-          median: Math.round(median * 100) / 100,
-          avg,
-          low: trimmed[0],
-          high: trimmed[trimmed.length - 1],
-          sampleSize: prices.length,
-          isReal: true
-        };
-
-        vintedPriceCache.set(cacheKey, { data: result, ts: Date.now() });
-        console.log('Apify Vinted prices for "' + query + '": median £' + result.median + ' (' + result.sampleSize + ' listings)');
-        return result;
-      }
+    const items = await res.json();
+    if (!Array.isArray(items) || items.length < 3) {
+      console.log('Apify: insufficient results for "' + query + '" (' + (items?.length || 0) + ')');
+      return null;
     }
 
-    console.log('Apify: no results for "' + query + '" after polling');
-    return null;
+    // Extract prices
+    const prices = items
+      .map(i => {
+        const p = i.price || i.priceNumeric || i.price_numeric || 0;
+        return typeof p === 'string' ? parseFloat(p.replace(/[^0-9.]/g, '')) : parseFloat(p);
+      })
+      .filter(p => p > 1 && p < 200)
+      .sort((a, b) => a - b);
+
+    if (prices.length < 3) return null;
+
+    const trimmed = prices.slice(Math.floor(prices.length * 0.2), Math.ceil(prices.length * 0.8));
+    const median = trimmed[Math.floor(trimmed.length / 2)];
+    const avg = Math.round(trimmed.reduce((a, b) => a + b, 0) / trimmed.length);
+
+    const result = {
+      median: Math.round(median * 100) / 100,
+      avg,
+      low: trimmed[0],
+      high: trimmed[trimmed.length - 1],
+      sampleSize: prices.length,
+      isReal: true
+    };
+
+    vintedPriceCache.set(cacheKey, { data: result, ts: Date.now() });
+    console.log('Apify Vinted "' + query + '": median £' + result.median + ' (' + result.sampleSize + ' listings)');
+    return result;
+
   } catch (e) {
-    console.log('Apify error for "' + query + '":', e.message);
+    console.log('Apify timeout/error for "' + query + '":', e.message);
     return null;
   }
 }
