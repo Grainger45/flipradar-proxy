@@ -235,10 +235,10 @@ async function getRealVintedPrices(query) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          mode: 'SEARCH',
-          query: query,
-          countries: ['gb'],
-          maxItems: 30
+          search: query,
+          country: 'gb',
+          maxItems: 30,
+          order: 'relevance'
         }),
         signal: AbortSignal.timeout(65000)
       }
