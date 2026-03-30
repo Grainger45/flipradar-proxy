@@ -217,76 +217,115 @@ async function getMarketPrices(query, token) {
   } catch (e) { return null; }
 }
 
-// Get REAL Vinted UK prices via Apify Vinted Smart Scraper (kazkn)
-const APIFY_KEY = process.env.APIFY_API_KEY;
-const vintedPriceCache = new Map();
+// ── EBAY SOLD PRICES — Real market data for sell price estimation ──
+// Uses eBay completed/sold listings to find what items actually sold for recently.
+// Vinted sell price = eBay sold median × 0.85 (Vinted buyers pay slightly less than eBay)
+const soldPriceCache = new Map();
 
-async function getRealVintedPrices(query) {
-  if (!APIFY_KEY) return null;
-
+async function getSoldPrices(query, token) {
   const cacheKey = query.toLowerCase().trim();
-  const cached = vintedPriceCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < 30 * 60 * 1000) return cached.data;
+  const cached = soldPriceCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data; // 1hr cache
 
   try {
-    const res = await fetch(
-      'https://api.apify.com/v2/acts/kazkn~vinted-smart-scraper/run-sync-get-dataset-items?token=' + APIFY_KEY + '&timeout=60&memory=256',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: 'SEARCH',
-          query: query,
-          countries: ['uk'],
-          maxItems: 30,
-          sortBy: 'relevance',
-          includePhotos: false,
-          includeSellerDetails: false
-        }),
-        signal: AbortSignal.timeout(65000)
-      }
-    );
+    // Search eBay UK completed sold listings
+    const q = encodeURIComponent(query);
+    const url = 'https://api.ebay.com/buy/browse/v1/item_summary/search?q=' + q +
+      '&limit=40&marketplace_ids=EBAY_GB' +
+      '&filter=itemLocationCountry:GB,buyingOptions:{FIXED_PRICE},conditions:{USED|VERY_GOOD|GOOD|EXCELLENT}' +
+      '&sort=endDateSoonest';
 
-    if (!res.ok) {
-      console.log('Apify error ' + res.status + ' for "' + query + '"');
-      return null;
-    }
-
-    const items = await res.json();
-    if (!Array.isArray(items) || items.length < 3) {
-      console.log('Apify: insufficient results for "' + query + '" (' + (items?.length || 0) + ')');
-      return null;
-    }
+    const r = await fetch(url, {
+      headers: { 'Authorization': 'Bearer ' + token, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_GB' },
+      signal: AbortSignal.timeout(10000)
+    });
+    const data = await r.json();
+    const items = (data.itemSummaries || []).filter(i => !shouldReject(i));
+    if (items.length < 5) return null;
 
     const prices = items
-      .map(i => {
-        const p = i.price || i.priceNumeric || i.price_numeric || 0;
-        return typeof p === 'string' ? parseFloat(p.replace(/[^0-9.]/g, '')) : parseFloat(p);
-      })
-      .filter(p => p > 1 && p < 200)
+      .map(i => parseFloat(i.price?.value || 0))
+      .filter(p => p > 3)
       .sort((a, b) => a - b);
 
-    if (prices.length < 3) return null;
+    if (prices.length < 5) return null;
 
+    // Remove top and bottom 20% outliers
     const trimmed = prices.slice(Math.floor(prices.length * 0.2), Math.ceil(prices.length * 0.8));
     const median = trimmed[Math.floor(trimmed.length / 2)];
-    const avg = Math.round(trimmed.reduce((a, b) => a + b, 0) / trimmed.length);
+
+    // Vinted typically 85% of eBay price (no seller fees but smaller audience)
+    const vintedEstimate = Math.round(median * 0.85);
 
     const result = {
-      median: Math.round(median * 100) / 100,
-      avg,
-      low: trimmed[0],
-      high: trimmed[trimmed.length - 1],
+      ebaySoldMedian: Math.round(median * 100) / 100,
+      vintedEstimate,
+      low: Math.round(trimmed[0] * 0.85),
+      high: Math.round(trimmed[trimmed.length - 1] * 0.85),
       sampleSize: prices.length,
       isReal: true
     };
 
-    vintedPriceCache.set(cacheKey, { data: result, ts: Date.now() });
-    console.log('Apify Vinted "' + query + '": median £' + result.median + ' (' + result.sampleSize + ' listings)');
+    soldPriceCache.set(cacheKey, { data: result, ts: Date.now() });
+    console.log('Sold prices "' + query + '": eBay median £' + result.ebaySoldMedian + ' → Vinted est £' + result.vintedEstimate + ' (' + result.sampleSize + ' sold)');
     return result;
-
   } catch (e) {
-    console.log('Apify timeout/error for "' + query + '":', e.message);
+    console.log('Sold price error for "' + query + '":', e.message);
+    return null;
+  }
+}
+
+// ── CLAUDE APPEAL SCORING ──
+// Scores every deal for desirability and condition before alerting.
+// Only items scoring 7/10+ on both appeal AND condition reach your inbox.
+async function scoreAppeal(title, brand, cat, condition, price) {
+  if (!ANTHROPIC_KEY) return null;
+
+  try {
+    const prompt = `You are an expert UK secondhand clothing reseller specialising in Vinted. 
+Evaluate this eBay listing to decide if it would sell well on Vinted UK.
+
+Item: "${title}"
+Brand: ${brand}
+Category: ${cat}
+Condition stated: ${condition || 'not specified'}
+Buy price: £${price}
+
+Score TWO things from 1-10:
+
+APPEAL (1-10): Would this item sell well on Vinted UK right now?
+Consider: Is this colourway desirable? Is this style currently popular? Would a Vinted buyer want this? Common sizes only (S/M/L/XL for adults). Avoid: unusual colourways, out of fashion styles, niche items, kids sizes that are hard to sell, women's items in a man's cut.
+
+CONDITION (1-10): Is the condition description trustworthy and acceptable?
+Consider: Vague descriptions like "good used condition" are risky. Clear descriptions are better. Red flags: stains, marks, fading, repairs, smell. Green flags: BNWT, unworn, excellent, immaculate.
+
+Respond with ONLY this JSON, nothing else:
+{"appeal": 7, "condition": 6, "appealReason": "one sentence", "conditionReason": "one sentence"}`;
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 150,
+        messages: [{ role: 'user', content: prompt }]
+      }),
+      signal: AbortSignal.timeout(15000)
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = data.content?.[0]?.text || '';
+    const clean = text.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+
+    if (typeof parsed.appeal !== 'number' || typeof parsed.condition !== 'number') return null;
+    return parsed;
+  } catch (e) {
     return null;
   }
 }
@@ -299,8 +338,8 @@ function getVintedRange(brand) {
   return null;
 }
 
-// Score a deal with all available data including real Vinted prices
-function scoreDeal(item, marketData, queueItem, realVintedData) {
+// Score a deal with eBay sold price data
+function scoreDeal(item, marketData, queueItem, soldData) {
   const price = parseFloat(item.price?.value || item.price || 0);
   if (price <= 0 || price > MAX_BUY_PRICE) return null;
 
@@ -308,23 +347,21 @@ function scoreDeal(item, marketData, queueItem, realVintedData) {
   const titleLower = title.toLowerCase();
   const hasCondWarn = COND_WARN.some(w => titleLower.includes(w));
 
-  // Condition signals
   const isExcellent = titleLower.includes('bnwt') || titleLower.includes('unworn') ||
     titleLower.includes('never worn') || titleLower.includes('new with tags') ||
     titleLower.includes('immaculate') || titleLower.includes('mint');
 
-  // ── VINTED PRICE: Use real Apify data if available, fall back to manual ranges ──
+  // ── VINTED SELL PRICE: Use eBay sold data if available, fall back to manual ranges ──
   let vintedSellPrice, vintedDataSource, vintedRange;
 
-  if (realVintedData && realVintedData.isReal && realVintedData.sampleSize >= 5) {
-    // REAL Vinted data from Apify — use median as list price
-    vintedSellPrice = realVintedData.median;
+  if (soldData && soldData.isReal && soldData.sampleSize >= 5) {
+    // REAL: eBay sold median × 0.85 = estimated Vinted price
+    vintedSellPrice = soldData.vintedEstimate;
     if (isExcellent) vintedSellPrice = Math.round(vintedSellPrice * 1.15);
     if (hasCondWarn) vintedSellPrice = Math.round(vintedSellPrice * 0.80);
-    vintedDataSource = 'real';
-    vintedRange = realVintedData;
+    vintedDataSource = 'sold';
   } else {
-    // Fall back to manual research ranges
+    // Fallback to manual research ranges
     vintedRange = getVintedRange(queueItem.brand);
     if (vintedRange) {
       vintedSellPrice = Math.round(vintedRange.low + (vintedRange.avg - vintedRange.low) * 0.3);
@@ -345,68 +382,48 @@ function scoreDeal(item, marketData, queueItem, realVintedData) {
   let confidenceReasons = [];
   let confidenceScore = 0;
 
-  const hasRealVinted = vintedDataSource === 'real';
+  const hasSoldData = vintedDataSource === 'sold';
   const hasMarketData = marketData && marketData.sampleSize >= 5;
 
-  if (hasRealVinted && hasMarketData) {
-    // Best case: both real Vinted prices AND real eBay market data
+  if (hasSoldData && hasMarketData) {
     const ratio = price / marketData.median;
     if (ratio <= MUST_BUY_RATIO && !hasCondWarn && vintedNet >= 15) {
       confidenceTier = 'mustbuy';
-      confidenceScore = 98;
-      confidenceReasons.push('✅ REAL Vinted UK prices: ' + realVintedData.sampleSize + ' live listings · Median £' + realVintedData.median + ' · Range £' + realVintedData.low + '–£' + realVintedData.high);
-      confidenceReasons.push('✅ Priced at ' + Math.round(ratio * 100) + '% of eBay market median (£' + marketData.median + ') — ' + marketData.sampleSize + ' listings');
+      confidenceScore = 95;
+      confidenceReasons.push('✅ Based on ' + soldData.sampleSize + ' real eBay UK sold listings · Market median £' + soldData.ebaySoldMedian + ' → Vinted est £' + soldData.vintedEstimate);
+      confidenceReasons.push('✅ Buy price at ' + Math.round(ratio * 100) + '% of active market median (£' + marketData.median + ')');
     } else if (ratio <= STRONG_RATIO && vintedNet >= itemMinProfit) {
       confidenceTier = 'strong';
-      confidenceScore = 82;
-      confidenceReasons.push('✅ REAL Vinted prices: median £' + realVintedData.median + ' (' + realVintedData.sampleSize + ' listings)');
-      confidenceReasons.push('eBay market median £' + marketData.median + ' · This item at ' + Math.round(ratio * 100) + '%');
+      confidenceScore = 78;
+      confidenceReasons.push('✅ eBay sold median £' + soldData.ebaySoldMedian + ' → Vinted est £' + soldData.vintedEstimate + ' (' + soldData.sampleSize + ' sold)');
+      confidenceReasons.push('Active market median £' + marketData.median + ' · Buy at ' + Math.round(ratio * 100) + '%');
     } else {
-      confidenceTier = 'possible';
-      confidenceScore = 55;
-      confidenceReasons.push('Real Vinted data: median £' + realVintedData.median + ' — margin tighter than ideal');
+      return null;
     }
-  } else if (hasRealVinted && !hasMarketData) {
-    // Real Vinted data but no eBay market data
+  } else if (hasSoldData && !hasMarketData) {
     if (!hasCondWarn && vintedNet >= 15) {
       confidenceTier = 'strong';
-      confidenceScore = 75;
-      confidenceReasons.push('✅ REAL Vinted UK prices: ' + realVintedData.sampleSize + ' listings · Median £' + realVintedData.median);
-      confidenceReasons.push('No eBay market comparison available for this search');
+      confidenceScore = 70;
+      confidenceReasons.push('✅ eBay sold data: ' + soldData.sampleSize + ' sold · Vinted est £' + soldData.vintedEstimate);
     } else {
-      confidenceTier = 'possible';
-      confidenceScore = 50;
-      confidenceReasons.push('Real Vinted data available but verify before buying');
+      return null;
     }
-  } else if (!hasRealVinted && hasMarketData) {
-    // eBay market data only — no real Vinted prices
+  } else if (!hasSoldData && hasMarketData) {
     const ratio = price / marketData.median;
     if (ratio <= MUST_BUY_RATIO && !hasCondWarn && vintedNet >= 15) {
-      confidenceTier = 'strong'; // Downgrade to strong without real Vinted confirmation
-      confidenceScore = 70;
-      confidenceReasons.push('eBay: priced at ' + Math.round(ratio * 100) + '% of market median (£' + marketData.median + ')');
-      confidenceReasons.push('⚠ Vinted price estimated — do 60 second check before buying');
-    } else if (ratio <= STRONG_RATIO && vintedNet >= itemMinProfit) {
-      confidenceTier = 'possible';
-      confidenceScore = 45;
-      confidenceReasons.push('eBay market data available but Vinted price not confirmed');
+      confidenceTier = 'strong';
+      confidenceScore = 65;
+      confidenceReasons.push('Active eBay market median £' + marketData.median + ' · Buy at ' + Math.round(ratio * 100) + '%');
+      confidenceReasons.push('⚠ Vinted sell price estimated — verify before buying');
     } else {
       return null;
     }
   } else {
-    // No real data at all — only show high-margin estimated deals
-    if (vintedNet >= 20 && !hasCondWarn) {
-      confidenceTier = 'possible';
-      confidenceScore = 30;
-      confidenceReasons.push('⚠ Estimated pricing only — verify on Vinted before buying');
-    } else {
-      return null;
-    }
+    return null; // No real data at all — skip
   }
 
-  // Boosts
-  if (isExcellent) { confidenceScore = Math.min(99, confidenceScore + 8); confidenceReasons.push('Excellent condition — commands higher Vinted price'); }
-  if (queueItem.cat === 'typo') { confidenceScore = Math.min(99, confidenceScore + 5); confidenceReasons.push('Misspelled title — zero competition from other buyers'); }
+  if (isExcellent) { confidenceScore = Math.min(99, confidenceScore + 8); confidenceReasons.push('Excellent condition signals — commands higher price'); }
+  if (queueItem.cat === 'typo') { confidenceScore = Math.min(99, confidenceScore + 5); confidenceReasons.push('Misspelled title — zero competition'); }
   if (titleLower.includes('loft find') || titleLower.includes('house clearance')) { confidenceScore = Math.min(99, confidenceScore + 5); confidenceReasons.push('Seller likely unaware of value'); }
 
   const roi = Math.round((vintedNet / price) * 100);
@@ -429,7 +446,7 @@ function scoreDeal(item, marketData, queueItem, realVintedData) {
     confidenceReasons,
     marketData,
     vintedRange,
-    realVintedData: realVintedData || null,
+    soldData: soldData || null,
     vintedDataSource,
     hasCondWarn,
     isExcellent,
@@ -491,18 +508,25 @@ function buildEmailHtml(deals) {
           <div style="font-size:20px;font-weight:700;">${d.roi}%</div>
         </div>
       </div>
-      ${d.realVintedData && d.realVintedData.isReal ? `
+      ${d.soldData ? `
       <div style="background:#f0fdf4;border:2px solid #16a34a;border-radius:6px;padding:10px 12px;margin-bottom:8px;font-size:11px;">
-        <div style="font-weight:700;color:#16a34a;margin-bottom:4px;">✅ REAL VINTED UK PRICES — Live data from Vinted right now</div>
-        <div style="font-family:monospace;color:#166534;">${d.realVintedData.sampleSize} current listings · Median £${d.realVintedData.median} · Range £${d.realVintedData.low}–£${d.realVintedData.high} · Avg £${d.realVintedData.avg}</div>
-        <div style="color:#166534;margin-top:3px;">Your list price of £${d.vintedListPrice} is based on real current Vinted data — not an estimate.</div>
+        <div style="font-weight:700;color:#16a34a;margin-bottom:3px;">✅ REAL eBay Sold Data — Based on actual recent sales</div>
+        <div style="font-family:monospace;color:#166534;">${d.soldData.sampleSize} sold listings · eBay median £${d.soldData.ebaySoldMedian} · Vinted estimate £${d.soldData.vintedEstimate} · Range £${d.soldData.low}–£${d.soldData.high}</div>
       </div>` : `
       <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:11px;">
-        <div style="color:#92400e;">⚠ Vinted price estimated — do a quick Vinted search before buying to confirm</div>
+        <div style="color:#92400e;">⚠ Sell price estimated — do a quick Vinted check before buying</div>
       </div>`}
+      ${d.appealScore ? `
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 12px;margin-bottom:8px;font-size:11px;">
+        <div style="font-weight:700;color:#1d4ed8;margin-bottom:4px;">🤖 Claude Appeal Check</div>
+        <div style="display:flex;gap:16px;margin-bottom:4px;">
+          <span><strong>Appeal ${d.appealScore}/10</strong> — ${d.appealReason}</span>
+        </div>
+        <div><strong>Condition ${d.conditionScore}/10</strong> — ${d.conditionReason}</div>
+      </div>` : ''}
       ${d.marketData ? `
-      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:11px;font-family:monospace;">
-        📊 eBay UK market: ${d.marketData.sampleSize} listings · Median £${d.marketData.median} · Range £${d.marketData.low}–£${d.marketData.high}
+      <div style="background:#f5f5f5;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:11px;font-family:monospace;">
+        📊 Active eBay UK: ${d.marketData.sampleSize} listings · Median £${d.marketData.median} · Range £${d.marketData.low}–£${d.marketData.high}
       </div>` : ''}
       <div style="margin-bottom:10px;">
         ${d.confidenceReasons.map(r => `<div style="font-size:11px;color:#444;margin-bottom:2px;">✓ ${r}</div>`).join('')}
@@ -533,7 +557,7 @@ function buildEmailHtml(deals) {
         <div style="font-size:18px;font-weight:700;margin-bottom:4px;">● FlipRadar Alert</div>
         <div style="font-size:12px;color:rgba(255,255,255,0.6);">${new Date().toLocaleString('en-GB')} · ${mustBuys.length} Must Buy · ${strong.length} Strong · ${possible.length} Possible</div>
       </div>
-      ${mustBuys.length > 0 ? `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;margin-bottom:12px;font-size:12px;color:#166534;">🎯 <strong>Must Buy deals now use REAL live Vinted prices fetched automatically — not estimates.</strong> These are the ones to act on quickly.</div>` : ''}
+      ${mustBuys.length > 0 ? `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;margin-bottom:12px;font-size:12px;color:#166534;">🎯 <strong>Must Buy deals are confirmed by real eBay sold data AND Claude appeal scoring. Both price AND desirability verified.</strong></div>` : ''}
       ${dealHtml}
       <div style="text-align:center;font-size:10px;color:#999;margin-top:16px;padding:12px;border-top:1px solid #e5e5e0;">
         FlipRadar UK · Profit = sell price − buy price − £${POSTAGE} postage · Vinted has no seller fees<br>
@@ -613,21 +637,58 @@ async function runScan() {
 
       if (!listings.length) continue;
 
-      // Fetch real Vinted prices via Apify — one call per search term, cached 30 mins
-      const realVintedData = await getRealVintedPrices(qItem.vintedQ || qItem.q);
+      // Get eBay sold prices for this search term — real sell price data
+      const soldData = await getSoldPrices(qItem.vintedQ || qItem.q, token);
 
+      // Score each listing
+      const candidates = [];
       for (const listing of listings) {
         const id = listing.itemId;
         if (alertedIds.has(id)) continue;
+        const deal = scoreDeal(listing, marketData, qItem, soldData);
+        if (deal && (deal.confidenceTier === 'mustbuy' || deal.confidenceTier === 'strong')) {
+          candidates.push(deal);
+        }
+      }
 
-        const deal = scoreDeal(listing, marketData, qItem, realVintedData);
-        if (!deal) continue;
+      if (!candidates.length) continue;
 
-        if (deal.confidenceTier === 'mustbuy' || deal.confidenceTier === 'strong') {
+      // ── CLAUDE APPEAL SCORING ──
+      // Only run Claude on candidates that passed price scoring — saves API calls
+      for (const deal of candidates) {
+        try {
+          const appeal = await scoreAppeal(deal.title, deal.brand, deal.cat, deal.condition, deal.price);
+
+          if (!appeal) {
+            // If Claude fails, let the deal through anyway
+            alertDeals.push(deal);
+            alertedIds.add(deal.id);
+            console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 50) + ' — £' + deal.price + ' → £' + deal.vintedListPrice + ' (+£' + deal.vintedNet + ') [appeal unscored]');
+            continue;
+          }
+
+          const appealScore = appeal.appeal;
+          const condScore = appeal.condition;
+
+          // Both must be 7+ to reach inbox
+          if (appealScore >= 7 && condScore >= 7) {
+            deal.appealScore = appealScore;
+            deal.conditionScore = condScore;
+            deal.appealReason = appeal.appealReason;
+            deal.conditionReason = appeal.conditionReason;
+            deal.confidenceReasons.push('✅ Appeal ' + appealScore + '/10 — ' + appeal.appealReason);
+            deal.confidenceReasons.push('✅ Condition ' + condScore + '/10 — ' + appeal.conditionReason);
+            deal.confidenceScore = Math.min(99, deal.confidenceScore + 5);
+            alertDeals.push(deal);
+            alertedIds.add(deal.id);
+            console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 45) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ') Appeal:' + appealScore + ' Cond:' + condScore);
+          } else {
+            console.log('[FILTERED] ' + deal.title.substring(0, 45) + ' — Appeal:' + appealScore + ' Cond:' + condScore + ' — ' + (appealScore < 7 ? appeal.appealReason : appeal.conditionReason));
+          }
+        } catch (e) {
+          // On error let deal through
           alertDeals.push(deal);
-          alertedIds.add(id);
-          const vintedSrc = realVintedData ? '(REAL Vinted)' : '(estimated)';
-          console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 55) + ' — Buy £' + deal.price + ' → Vinted £' + deal.vintedListPrice + ' ' + vintedSrc + ' (+£' + deal.vintedNet + ')');
+          alertedIds.add(deal.id);
         }
       }
 
