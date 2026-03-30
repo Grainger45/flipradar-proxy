@@ -235,10 +235,13 @@ async function getRealVintedPrices(query) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          search: query,
-          country: 'gb',
+          mode: 'SEARCH',
+          query: query,
+          countries: ['uk'],
           maxItems: 30,
-          order: 'relevance'
+          sortBy: 'relevance',
+          includePhotos: false,
+          includeSellerDetails: false
         }),
         signal: AbortSignal.timeout(65000)
       }
