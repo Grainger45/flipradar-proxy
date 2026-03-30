@@ -29,96 +29,86 @@ const MIN_ROI = 100; // Must make at least 100% return on buy price (e.g. buy £
 // Every item here has a proven Vinted buyer audience and realistic profit margin
 const QUEUE = [
 
-  // ═══ TIER 1: FASTEST SELLING — Sneakers (47% sell-through, avg 4 days) ═══
-  // Trainers are the #1 most liquid category on Vinted. Sellers often don't know value.
-  {q:'Nike Air Force 1 trainers',brand:'Nike',avgSell:55,minProfit:15,vintedQ:'Nike Air Force 1',cat:'trainers'},
-  {q:'New Balance 990 991 trainers',brand:'New Balance',avgSell:85,minProfit:20,vintedQ:'New Balance 990 991',cat:'trainers'},
-  {q:'New Balance 550 trainers',brand:'New Balance',avgSell:70,minProfit:18,vintedQ:'New Balance 550',cat:'trainers'},
-  {q:'Adidas Samba trainers',brand:'Adidas',avgSell:65,minProfit:18,vintedQ:'Adidas Samba',cat:'trainers'},
-  {q:'Nike Dunk trainers',brand:'Nike',avgSell:75,minProfit:20,vintedQ:'Nike Dunk',cat:'trainers'},
-  {q:'Asics Gel Lyte trainers vintage',brand:'Asics',avgSell:60,minProfit:15,vintedQ:'Asics Gel Lyte',cat:'trainers'},
+  // ═══ TIER 1: TRAINERS ═══
+  {q:'Nike Air Force 1 trainers',brand:'Nike',avgSell:55,minProfit:15,vintedQ:'Nike Air Force 1',soldQ:'Nike Air Force 1 trainers shoes',cat:'trainers'},
+  {q:'New Balance 990 991 trainers',brand:'New Balance',avgSell:85,minProfit:20,vintedQ:'New Balance 990 991',soldQ:'New Balance 990 trainers shoes',cat:'trainers'},
+  {q:'New Balance 550 trainers',brand:'New Balance',avgSell:70,minProfit:18,vintedQ:'New Balance 550',soldQ:'New Balance 550 trainers shoes',cat:'trainers'},
+  {q:'Adidas Samba trainers',brand:'Adidas',avgSell:65,minProfit:18,vintedQ:'Adidas Samba',soldQ:'Adidas Samba trainers shoes',cat:'trainers'},
+  {q:'Nike Dunk trainers',brand:'Nike',avgSell:75,minProfit:20,vintedQ:'Nike Dunk',soldQ:'Nike Dunk trainers shoes',cat:'trainers'},
+  {q:'Asics Gel Lyte trainers vintage',brand:'Asics',avgSell:60,minProfit:15,vintedQ:'Asics Gel Lyte',soldQ:'Asics Gel Lyte trainers shoes',cat:'trainers'},
 
-  // ═══ TIER 2: KIDS DESIGNER — Fastest selling clothing (3.8 days avg) ═══
-  // Parents sell cheap when kids grow out. Buyers pay full price on Vinted.
-  {q:'Stone Island Junior jacket boys',brand:'Stone Island Junior',avgSell:85,minProfit:25,vintedQ:'Stone Island Junior jacket',cat:'kids'},
-  {q:'CP Company Junior jacket kids',brand:'CP Company Junior',avgSell:75,minProfit:22,vintedQ:'CP Company Junior jacket',cat:'kids'},
-  {q:'Moncler kids jacket boys girls',brand:'Moncler Kids',avgSell:110,minProfit:30,vintedQ:'Moncler kids jacket',cat:'kids'},
-  {q:'Burberry kids jacket coat boys',brand:'Burberry Kids',avgSell:60,minProfit:18,vintedQ:'Burberry kids jacket',cat:'kids'},
-  {q:'Stone Island kids badge top',brand:'Stone Island Junior',avgSell:45,minProfit:15,vintedQ:'Stone Island Junior top',cat:'kids'},
+  // ═══ TIER 2: KIDS DESIGNER ═══
+  {q:'Stone Island Junior jacket boys',brand:'Stone Island Junior',avgSell:85,minProfit:25,vintedQ:'Stone Island Junior jacket',soldQ:'Stone Island Junior jacket kids',cat:'kids'},
+  {q:'CP Company Junior jacket kids',brand:'CP Company Junior',avgSell:75,minProfit:22,vintedQ:'CP Company Junior jacket',soldQ:'CP Company Junior jacket kids',cat:'kids'},
+  {q:'Moncler kids jacket boys girls',brand:'Moncler Kids',avgSell:110,minProfit:30,vintedQ:'Moncler kids jacket',soldQ:'Moncler kids jacket boys girls',cat:'kids'},
+  {q:'Burberry kids jacket coat boys',brand:'Burberry Kids',avgSell:60,minProfit:18,vintedQ:'Burberry kids jacket',soldQ:'Burberry kids jacket coat',cat:'kids'},
+  {q:'Stone Island kids badge top',brand:'Stone Island Junior',avgSell:45,minProfit:15,vintedQ:'Stone Island Junior top',soldQ:'Stone Island Junior top kids',cat:'kids'},
 
-  // ═══ TIER 3: PREMIUM POLOS — Lacoste and Fred Perry only ═══
-  // Ralph Lauren polos REMOVED — too saturated on Vinted, prices match eBay, no real gap
-  // Lacoste and Fred Perry have less Vinted supply so prices hold better
-  {q:'Lacoste polo shirt mens',brand:'Lacoste',avgSell:32,minProfit:12,vintedQ:'Lacoste polo shirt mens',cat:'polo'},
-  {q:'Fred Perry polo shirt mens',brand:'Fred Perry',avgSell:28,minProfit:10,vintedQ:'Fred Perry polo shirt',cat:'polo'},
-  {q:'Tommy Hilfiger polo shirt mens',brand:'Tommy Hilfiger',avgSell:28,minProfit:10,vintedQ:'Tommy Hilfiger polo',cat:'polo'},
+  // ═══ TIER 3: PREMIUM POLOS ═══
+  {q:'Lacoste polo shirt mens',brand:'Lacoste',avgSell:32,minProfit:12,vintedQ:'Lacoste polo shirt mens',soldQ:'Lacoste polo shirt mens',cat:'polo'},
+  {q:'Fred Perry polo shirt mens',brand:'Fred Perry',avgSell:28,minProfit:10,vintedQ:'Fred Perry polo shirt',soldQ:'Fred Perry polo shirt mens',cat:'polo'},
+  {q:'Tommy Hilfiger polo shirt mens',brand:'Tommy Hilfiger',avgSell:28,minProfit:10,vintedQ:'Tommy Hilfiger polo',soldQ:'Tommy Hilfiger polo shirt mens',cat:'polo'},
 
-  // ═══ TIER 4: NIKE VINTAGE — Undisputed #1 brand on Vinted ═══
-  // Vintage Nike sweaters/hoodies are most searched items on Vinted 2026
-  {q:'Nike vintage hoodie sweatshirt',brand:'Nike',avgSell:42,minProfit:15,vintedQ:'Nike vintage hoodie',cat:'nike'},
-  {q:'Nike centre swoosh hoodie vintage',brand:'Nike',avgSell:48,minProfit:18,vintedQ:'Nike centre swoosh hoodie',cat:'nike'},
-  {q:'Nike spellout sweatshirt vintage',brand:'Nike',avgSell:45,minProfit:16,vintedQ:'Nike spellout sweatshirt',cat:'nike'},
-  {q:'Nike tech fleece jacket',brand:'Nike',avgSell:55,minProfit:18,vintedQ:'Nike tech fleece',cat:'nike'},
-  {q:'Nike ACG jacket vintage',brand:'Nike',avgSell:65,minProfit:20,vintedQ:'Nike ACG jacket',cat:'nike'},
+  // ═══ TIER 4: NIKE VINTAGE ═══
+  {q:'Nike vintage hoodie sweatshirt',brand:'Nike',avgSell:42,minProfit:15,vintedQ:'Nike vintage hoodie',soldQ:'Nike vintage hoodie sweatshirt',cat:'nike'},
+  {q:'Nike centre swoosh hoodie vintage',brand:'Nike',avgSell:48,minProfit:18,vintedQ:'Nike centre swoosh hoodie',soldQ:'Nike centre swoosh hoodie',cat:'nike'},
+  {q:'Nike spellout sweatshirt vintage',brand:'Nike',avgSell:45,minProfit:16,vintedQ:'Nike spellout sweatshirt',soldQ:'Nike spellout sweatshirt vintage',cat:'nike'},
+  {q:'Nike tech fleece jacket',brand:'Nike',avgSell:55,minProfit:18,vintedQ:'Nike tech fleece',soldQ:'Nike tech fleece jacket hoodie',cat:'nike'},
+  {q:'Nike ACG jacket vintage',brand:'Nike',avgSell:65,minProfit:20,vintedQ:'Nike ACG jacket',soldQ:'Nike ACG jacket vintage',cat:'nike'},
 
-  // ═══ TIER 5: OUTERWEAR — High Vinted values, seasonal but worth holding ═══
-  // Jackets and coats hold value well. Barbour especially undervalued by eBay sellers.
-  {q:'Barbour wax jacket vintage',brand:'Barbour',avgSell:80,minProfit:25,vintedQ:'Barbour wax jacket',cat:'outerwear'},
-  {q:'North Face fleece jacket vintage',brand:'North Face',avgSell:55,minProfit:18,vintedQ:'North Face fleece',cat:'outerwear'},
-  {q:'Patagonia fleece jacket half zip',brand:'Patagonia',avgSell:65,minProfit:20,vintedQ:'Patagonia fleece',cat:'outerwear'},
-  {q:'Arc teryx fleece jacket',brand:"Arc'teryx",avgSell:90,minProfit:28,vintedQ:"Arc'teryx fleece",cat:'outerwear'},
-  {q:'Carhartt WIP jacket coat',brand:'Carhartt WIP',avgSell:55,minProfit:18,vintedQ:'Carhartt WIP jacket',cat:'outerwear'},
-  {q:'Helly Hansen fleece jacket vintage',brand:'Helly Hansen',avgSell:38,minProfit:12,vintedQ:'Helly Hansen fleece',cat:'outerwear'},
+  // ═══ TIER 5: OUTERWEAR ═══
+  {q:'Barbour wax jacket vintage',brand:'Barbour',avgSell:80,minProfit:25,vintedQ:'Barbour wax jacket',soldQ:'Barbour wax jacket mens',cat:'outerwear'},
+  {q:'North Face fleece jacket vintage',brand:'North Face',avgSell:55,minProfit:18,vintedQ:'North Face fleece',soldQ:'North Face fleece jacket',cat:'outerwear'},
+  {q:'Patagonia fleece jacket half zip',brand:'Patagonia',avgSell:65,minProfit:20,vintedQ:'Patagonia fleece',soldQ:'Patagonia fleece jacket half zip',cat:'outerwear'},
+  {q:'Arc teryx fleece jacket',brand:"Arc'teryx",avgSell:90,minProfit:28,vintedQ:"Arc'teryx fleece",soldQ:"Arc'teryx fleece jacket",cat:'outerwear'},
+  {q:'Carhartt WIP jacket coat',brand:'Carhartt WIP',avgSell:55,minProfit:18,vintedQ:'Carhartt WIP jacket',soldQ:'Carhartt WIP jacket coat',cat:'outerwear'},
+  {q:'Helly Hansen fleece jacket vintage',brand:'Helly Hansen',avgSell:38,minProfit:12,vintedQ:'Helly Hansen fleece',soldQ:'Helly Hansen fleece jacket',cat:'outerwear'},
 
-  // ═══ TIER 6: GORPCORE — Outdoor gear holds value better than any clothing ═══
-  // Patagonia/Arc'teryx/North Face sellers rarely know real value. Massive Vinted prices.
-  {q:'Patagonia down jacket puffer',brand:'Patagonia',avgSell:95,minProfit:30,vintedQ:'Patagonia down jacket',cat:'gorpcore'},
-  {q:'Arc teryx Gore-Tex jacket shell',brand:"Arc'teryx",avgSell:120,minProfit:35,vintedQ:"Arc'teryx jacket",cat:'gorpcore'},
-  {q:'North Face 700 puffer jacket',brand:'North Face',avgSell:75,minProfit:22,vintedQ:'North Face puffer jacket',cat:'gorpcore'},
-  {q:'Patagonia Synchilla fleece vintage',brand:'Patagonia',avgSell:65,minProfit:20,vintedQ:'Patagonia Synchilla fleece',cat:'gorpcore'},
+  // ═══ TIER 6: GORPCORE ═══
+  {q:'Patagonia down jacket puffer',brand:'Patagonia',avgSell:95,minProfit:30,vintedQ:'Patagonia down jacket',soldQ:'Patagonia down jacket puffer',cat:'gorpcore'},
+  {q:'Arc teryx Gore-Tex jacket shell',brand:"Arc'teryx",avgSell:120,minProfit:35,vintedQ:"Arc'teryx jacket",soldQ:"Arc'teryx Gore-Tex jacket shell",cat:'gorpcore'},
+  {q:'North Face 700 puffer jacket',brand:'North Face',avgSell:75,minProfit:22,vintedQ:'North Face puffer jacket',soldQ:'North Face 700 puffer jacket',cat:'gorpcore'},
+  {q:'Patagonia Synchilla fleece vintage',brand:'Patagonia',avgSell:65,minProfit:20,vintedQ:'Patagonia Synchilla fleece',soldQ:'Patagonia Synchilla fleece',cat:'gorpcore'},
 
-  // ═══ TIER 7: VINTAGE BAND TEES — Single stitch = serious money ═══
-  // 90s single stitch band tees bought for £4 sell for £30-60 on Vinted/Depop
-  // eBay sellers listing these have zero idea what they're worth
-  {q:'vintage band t shirt single stitch 90s',brand:'Vintage Band Tee',avgSell:45,minProfit:15,vintedQ:'vintage band tshirt single stitch',cat:'vintage'},
-  {q:'vintage rap tee hip hop shirt 90s',brand:'Vintage Rap Tee',avgSell:55,minProfit:18,vintedQ:'vintage rap tshirt hip hop',cat:'vintage'},
-  {q:'Harley Davidson vintage t shirt',brand:'Harley Davidson',avgSell:38,minProfit:12,vintedQ:'Harley Davidson vintage tshirt',cat:'vintage'},
-  {q:'vintage rock band tee loft find',brand:'Vintage Band Tee',avgSell:42,minProfit:14,vintedQ:'vintage band tshirt',cat:'vintage'},
+  // ═══ TIER 7: VINTAGE BAND TEES ═══
+  {q:'vintage band t shirt single stitch 90s',brand:'Vintage Band Tee',avgSell:45,minProfit:15,vintedQ:'vintage band tshirt single stitch',soldQ:'vintage band t shirt single stitch 90s',cat:'vintage'},
+  {q:'vintage rap tee hip hop shirt 90s',brand:'Vintage Rap Tee',avgSell:55,minProfit:18,vintedQ:'vintage rap tshirt hip hop',soldQ:'vintage rap tee hip hop 90s',cat:'vintage'},
+  {q:'Harley Davidson vintage t shirt',brand:'Harley Davidson',avgSell:38,minProfit:12,vintedQ:'Harley Davidson vintage tshirt',soldQ:'Harley Davidson vintage t shirt',cat:'vintage'},
+  {q:'vintage rock band tee loft find',brand:'Vintage Band Tee',avgSell:42,minProfit:14,vintedQ:'vintage band tshirt',soldQ:'vintage rock band tee',cat:'vintage'},
 
-  // ═══ TIER 8: ACTIVEWEAR — Growing fast on Vinted, sets especially valuable ═══
-  {q:'Lululemon leggings top set',brand:'Lululemon',avgSell:45,minProfit:15,vintedQ:'Lululemon leggings',cat:'activewear'},
-  {q:'Gymshark set leggings top',brand:'Gymshark',avgSell:35,minProfit:12,vintedQ:'Gymshark set',cat:'activewear'},
-  {q:'Sweaty Betty leggings top',brand:'Sweaty Betty',avgSell:35,minProfit:12,vintedQ:'Sweaty Betty leggings',cat:'activewear'},
+  // ═══ TIER 8: ACTIVEWEAR ═══
+  {q:'Lululemon leggings top set',brand:'Lululemon',avgSell:45,minProfit:15,vintedQ:'Lululemon leggings',soldQ:'Lululemon leggings womens',cat:'activewear'},
+  {q:'Gymshark set leggings top',brand:'Gymshark',avgSell:35,minProfit:12,vintedQ:'Gymshark set',soldQ:'Gymshark leggings set womens',cat:'activewear'},
+  {q:'Sweaty Betty leggings top',brand:'Sweaty Betty',avgSell:35,minProfit:12,vintedQ:'Sweaty Betty leggings',soldQ:'Sweaty Betty leggings womens',cat:'activewear'},
 
-  // ═══ TIER 7: VINTAGE DENIM — Levi's 501s are most searched jeans on Vinted ═══
-  {q:'Levi 501 jeans vintage',brand:"Levi's",avgSell:45,minProfit:15,vintedQ:"Levi's 501 jeans",cat:'denim'},
-  {q:'Levi 501 jeans straight leg',brand:"Levi's",avgSell:42,minProfit:14,vintedQ:"Levi's 501",cat:'denim'},
+  // ═══ TIER 9: DENIM ═══
+  {q:'Levi 501 jeans vintage',brand:"Levi's",avgSell:45,minProfit:15,vintedQ:"Levi's 501 jeans",soldQ:"Levi's 501 jeans",cat:'denim'},
+  {q:'Levi 501 jeans straight leg',brand:"Levi's",avgSell:42,minProfit:14,vintedQ:"Levi's 501",soldQ:"Levi's 501 straight leg jeans",cat:'denim'},
 
-  // ═══ TIER 8: SELLER IGNORANCE — House clearance/loft finds ═══
-  // Untitled vintage items where seller has no idea what they have
-  {q:'vintage jacket loft find clearance',brand:'Various',avgSell:40,minProfit:12,vintedQ:'vintage jacket',cat:'vintage'},
-  {q:'vintage hoodie sweatshirt old clearance',brand:'Various',avgSell:35,minProfit:10,vintedQ:'vintage hoodie',cat:'vintage'},
-  {q:'vintage retro ski jacket colourful',brand:'Various',avgSell:55,minProfit:18,vintedQ:'vintage ski jacket',cat:'vintage'},
-  {q:'Moschino vintage top jacket',brand:'Moschino',avgSell:60,minProfit:18,vintedQ:'Moschino vintage',cat:'vintage'},
-  {q:'Versace jeans couture vintage',brand:'Versace Jeans',avgSell:65,minProfit:20,vintedQ:'Versace Jeans Couture',cat:'vintage'},
-  {q:'Armani Exchange vintage jacket',brand:'Armani',avgSell:45,minProfit:15,vintedQ:'Armani Exchange vintage',cat:'vintage'},
+  // ═══ TIER 10: SELLER IGNORANCE ═══
+  {q:'vintage jacket loft find clearance',brand:'Various',avgSell:40,minProfit:12,vintedQ:'vintage jacket',soldQ:'vintage jacket mens',cat:'vintage'},
+  {q:'vintage hoodie sweatshirt old clearance',brand:'Various',avgSell:35,minProfit:10,vintedQ:'vintage hoodie',soldQ:'vintage hoodie sweatshirt',cat:'vintage'},
+  {q:'vintage retro ski jacket colourful',brand:'Various',avgSell:55,minProfit:18,vintedQ:'vintage ski jacket',soldQ:'vintage retro ski jacket',cat:'vintage'},
+  {q:'Moschino vintage top jacket',brand:'Moschino',avgSell:60,minProfit:18,vintedQ:'Moschino vintage',soldQ:'Moschino vintage jacket top',cat:'vintage'},
+  {q:'Versace jeans couture vintage',brand:'Versace Jeans',avgSell:65,minProfit:20,vintedQ:'Versace Jeans Couture',soldQ:'Versace Jeans Couture top jacket',cat:'vintage'},
+  {q:'Armani Exchange vintage jacket',brand:'Armani',avgSell:45,minProfit:15,vintedQ:'Armani Exchange vintage',soldQ:'Armani Exchange jacket',cat:'vintage'},
 
-  // ═══ TIER 9: FOOTBALL SHIRTS — Collector market, seller ignorance very high ═══
-  {q:'Parma Fiorentina Sampdoria football shirt',brand:'Serie A',avgSell:65,minProfit:20,vintedQ:'Serie A vintage football shirt',cat:'football'},
-  {q:'USSR Yugoslavia Eastern European football shirt',brand:'Eastern Europe',avgSell:65,minProfit:20,vintedQ:'vintage football shirt',cat:'football'},
-  {q:'football shirt loft find old rare bundle',brand:'Football',avgSell:50,minProfit:15,vintedQ:'vintage football shirt',cat:'football'},
-  {q:'Wimbledon Coventry Bradford City shirt',brand:'UK Lower League',avgSell:45,minProfit:14,vintedQ:'lower league football shirt',cat:'football'},
+  // ═══ TIER 11: FOOTBALL SHIRTS ═══
+  {q:'Parma Fiorentina Sampdoria football shirt',brand:'Serie A',avgSell:65,minProfit:20,vintedQ:'Serie A vintage football shirt',soldQ:'vintage Serie A football shirt',cat:'football'},
+  {q:'USSR Yugoslavia Eastern European football shirt',brand:'Eastern Europe',avgSell:65,minProfit:20,vintedQ:'vintage football shirt',soldQ:'vintage Eastern European football shirt',cat:'football'},
+  {q:'football shirt loft find old rare bundle',brand:'Football',avgSell:50,minProfit:15,vintedQ:'vintage football shirt',soldQ:'vintage football shirt',cat:'football'},
+  {q:'Wimbledon Coventry Bradford City shirt',brand:'UK Lower League',avgSell:45,minProfit:14,vintedQ:'lower league football shirt',soldQ:'lower league vintage football shirt',cat:'football'},
 
-  // ═══ TIER 10: MISSPELLINGS — Zero competition, genuine bargains ═══
-  {q:'Addidas hoodie vintage',brand:'Adidas',avgSell:35,minProfit:12,vintedQ:'Adidas hoodie',cat:'typo'},
-  {q:'Niike hoodie vintage',brand:'Nike',avgSell:42,minProfit:15,vintedQ:'Nike hoodie',cat:'typo'},
-  {q:'Patogonia fleece jacket',brand:'Patagonia',avgSell:65,minProfit:20,vintedQ:'Patagonia fleece',cat:'typo'},
-  {q:'Barbour wax jakcet',brand:'Barbour',avgSell:80,minProfit:25,vintedQ:'Barbour wax jacket',cat:'typo'},
-  {q:'Stone Ilsand junior jacket',brand:'Stone Island Junior',avgSell:85,minProfit:25,vintedQ:'Stone Island Junior',cat:'typo'},
-  {q:'Luluelmon leggings',brand:'Lululemon',avgSell:45,minProfit:15,vintedQ:'Lululemon leggings',cat:'typo'},
-  {q:'Freddy Perry polo shirt',brand:'Fred Perry',avgSell:28,minProfit:10,vintedQ:'Fred Perry polo',cat:'typo'},
-  {q:'Lacoste polo shitr',brand:'Lacoste',avgSell:32,minProfit:12,vintedQ:'Lacoste polo',cat:'typo'},
-  {q:'New Ballance trainers',brand:'New Balance',avgSell:85,minProfit:20,vintedQ:'New Balance trainers',cat:'typo'},
+  // ═══ TIER 12: MISSPELLINGS ═══
+  {q:'Addidas hoodie vintage',brand:'Adidas',avgSell:35,minProfit:12,vintedQ:'Adidas hoodie',soldQ:'Adidas hoodie sweatshirt',cat:'typo'},
+  {q:'Niike hoodie vintage',brand:'Nike',avgSell:42,minProfit:15,vintedQ:'Nike hoodie',soldQ:'Nike hoodie sweatshirt vintage',cat:'typo'},
+  {q:'Patogonia fleece jacket',brand:'Patagonia',avgSell:65,minProfit:20,vintedQ:'Patagonia fleece',soldQ:'Patagonia fleece jacket',cat:'typo'},
+  {q:'Barbour wax jakcet',brand:'Barbour',avgSell:80,minProfit:25,vintedQ:'Barbour wax jacket',soldQ:'Barbour wax jacket mens',cat:'typo'},
+  {q:'Stone Ilsand junior jacket',brand:'Stone Island Junior',avgSell:85,minProfit:25,vintedQ:'Stone Island Junior',soldQ:'Stone Island Junior jacket kids',cat:'typo'},
+  {q:'Luluelmon leggings',brand:'Lululemon',avgSell:45,minProfit:15,vintedQ:'Lululemon leggings',soldQ:'Lululemon leggings womens',cat:'typo'},
+  {q:'Freddy Perry polo shirt',brand:'Fred Perry',avgSell:28,minProfit:10,vintedQ:'Fred Perry polo',soldQ:'Fred Perry polo shirt mens',cat:'typo'},
+  {q:'Lacoste polo shitr',brand:'Lacoste',avgSell:32,minProfit:12,vintedQ:'Lacoste polo',soldQ:'Lacoste polo shirt mens',cat:'typo'},
+  {q:'New Ballance trainers',brand:'New Balance',avgSell:85,minProfit:20,vintedQ:'New Balance trainers',soldQ:'New Balance trainers shoes',cat:'typo'},
 ];
 
 // ── REAL VINTED PRICE RANGES (from manual research March 2026) ──
@@ -471,99 +461,102 @@ function generateVintedTitle(originalTitle, brand, cat) {
   return (brand + ' ' + cat + ' ' + size + (condition ? ' ' + condition : '') + ' Vintage').trim().substring(0, 60);
 }
 
-// Build rich HTML email
+// Build clean, slick HTML email
 function buildEmailHtml(deals) {
   const mustBuys = deals.filter(d => d.confidenceTier === 'mustbuy');
   const strong = deals.filter(d => d.confidenceTier === 'strong');
-  const possible = deals.filter(d => d.confidenceTier === 'possible');
 
-  const tierColor = t => t === 'mustbuy' ? '#16a34a' : t === 'strong' ? '#2563eb' : '#d97706';
-  const tierLabel = t => t === 'mustbuy' ? '🎯 MUST BUY' : t === 'strong' ? '⚡ STRONG' : '✓ POSSIBLE';
-  const tierDesc = t => t === 'mustbuy'
-    ? 'Real eBay data confirms this is priced well below market. Act quickly.'
-    : t === 'strong'
-    ? 'Good profit likely — quick Vinted check recommended before buying.'
-    : 'Estimated profit — always verify on Vinted before purchasing.';
+  const dealHtml = deals.map(d => {
+    const isMustBuy = d.confidenceTier === 'mustbuy';
+    const accentColor = isMustBuy ? '#16a34a' : '#2563eb';
+    const bgColor = isMustBuy ? '#f0fdf4' : '#eff6ff';
+    const borderColor = isMustBuy ? '#bbf7d0' : '#bfdbfe';
+    const label = isMustBuy ? '🎯 MUST BUY' : '⚡ STRONG';
 
-  const dealHtml = deals.map(d => `
-    <div style="border:2px solid ${tierColor(d.confidenceTier)};border-radius:10px;padding:16px;margin-bottom:16px;font-family:sans-serif;background:#fff;">
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:${tierColor(d.confidenceTier)};margin-bottom:4px;">${tierLabel(d.confidenceTier)}</div>
-      <div style="font-size:10px;color:#666;margin-bottom:8px;">${tierDesc(d.confidenceTier)}</div>
-      <div style="font-size:16px;font-weight:700;margin-bottom:10px;line-height:1.3;">${d.title}</div>
-      <div style="display:flex;gap:16px;margin-bottom:10px;flex-wrap:wrap;">
-        <div style="text-align:center;padding:8px 12px;background:#f5f5f5;border-radius:6px;">
-          <div style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:2px;">Buy for</div>
-          <div style="font-size:20px;font-weight:700;">£${d.price}</div>
-        </div>
-        <div style="text-align:center;padding:8px 12px;background:#f5f5f5;border-radius:6px;">
-          <div style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:2px;">List on Vinted</div>
-          <div style="font-size:20px;font-weight:700;color:#0891b2;">£${d.vintedListPrice}</div>
-          ${d.vintedRange ? `<div style="font-size:9px;color:#888;">Range £${d.vintedRange.low}–£${d.vintedRange.high}</div>` : ''}
-        </div>
-        <div style="text-align:center;padding:8px 12px;background:#f0fdf4;border-radius:6px;border:1px solid #bbf7d0;">
-          <div style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:2px;">Net profit</div>
-          <div style="font-size:20px;font-weight:700;color:#16a34a;">+£${d.vintedNet}</div>
-          <div style="font-size:9px;color:#888;">after £${POSTAGE} postage</div>
-        </div>
-        <div style="text-align:center;padding:8px 12px;background:#f5f5f5;border-radius:6px;">
-          <div style="font-size:10px;color:#888;text-transform:uppercase;margin-bottom:2px;">ROI</div>
-          <div style="font-size:20px;font-weight:700;">${d.roi}%</div>
-        </div>
+    return `
+    <div style="background:#ffffff;border-radius:12px;margin-bottom:20px;overflow:hidden;border:1px solid #e5e5e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+
+      <!-- Tier banner -->
+      <div style="background:${accentColor};padding:10px 16px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="color:white;font-weight:700;font-size:13px;letter-spacing:0.05em;">${label}</span>
+        <span style="color:rgba(255,255,255,0.85);font-size:12px;">${d.brand} · ${d.cat}</span>
       </div>
-      ${d.soldData ? `
-      <div style="background:#f0fdf4;border:2px solid #16a34a;border-radius:6px;padding:10px 12px;margin-bottom:8px;font-size:11px;">
-        <div style="font-weight:700;color:#16a34a;margin-bottom:3px;">✅ REAL eBay Sold Data — Based on actual recent sales</div>
-        <div style="font-family:monospace;color:#166534;">${d.soldData.sampleSize} sold listings · eBay median £${d.soldData.ebaySoldMedian} · Vinted estimate £${d.soldData.vintedEstimate} · Range £${d.soldData.low}–£${d.soldData.high}</div>
-      </div>` : `
-      <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:11px;">
-        <div style="color:#92400e;">⚠ Sell price estimated — do a quick Vinted check before buying</div>
-      </div>`}
-      ${d.appealScore ? `
-      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 12px;margin-bottom:8px;font-size:11px;">
-        <div style="font-weight:700;color:#1d4ed8;margin-bottom:4px;">🤖 Claude Appeal Check</div>
-        <div style="display:flex;gap:16px;margin-bottom:4px;">
-          <span><strong>Appeal ${d.appealScore}/10</strong> — ${d.appealReason}</span>
+
+      <!-- Title -->
+      <div style="padding:14px 16px 0;">
+        <div style="font-size:15px;font-weight:600;color:#111;line-height:1.4;margin-bottom:14px;">${d.title}</div>
+
+        <!-- Numbers row -->
+        <div style="display:flex;gap:8px;margin-bottom:14px;">
+          <div style="flex:1;background:#f7f7f5;border-radius:8px;padding:10px;text-align:center;">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px;">Buy</div>
+            <div style="font-size:22px;font-weight:700;color:#111;">£${d.price}</div>
+          </div>
+          <div style="display:flex;align-items:center;color:#bbb;font-size:16px;">→</div>
+          <div style="flex:1;background:#f7f7f5;border-radius:8px;padding:10px;text-align:center;">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px;">List</div>
+            <div style="font-size:22px;font-weight:700;color:#0891b2;">£${d.vintedListPrice}</div>
+          </div>
+          <div style="display:flex;align-items:center;color:#bbb;font-size:16px;">=</div>
+          <div style="flex:1;background:${bgColor};border:1px solid ${borderColor};border-radius:8px;padding:10px;text-align:center;">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px;">Profit</div>
+            <div style="font-size:22px;font-weight:700;color:${accentColor};">+£${d.vintedNet}</div>
+          </div>
+          <div style="flex:1;background:#f7f7f5;border-radius:8px;padding:10px;text-align:center;">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px;">ROI</div>
+            <div style="font-size:22px;font-weight:700;color:#111;">${d.roi}%</div>
+          </div>
         </div>
-        <div><strong>Condition ${d.conditionScore}/10</strong> — ${d.conditionReason}</div>
-      </div>` : ''}
-      ${d.marketData ? `
-      <div style="background:#f5f5f5;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:11px;font-family:monospace;">
-        📊 Active eBay UK: ${d.marketData.sampleSize} listings · Median £${d.marketData.median} · Range £${d.marketData.low}–£${d.marketData.high}
-      </div>` : ''}
-      <div style="margin-bottom:10px;">
-        ${d.confidenceReasons.map(r => `<div style="font-size:11px;color:#444;margin-bottom:2px;">✓ ${r}</div>`).join('')}
-        ${d.hasCondWarn ? '<div style="font-size:11px;color:#dc2626;margin-bottom:2px;">⚠ Condition flag in title — check listing carefully before buying</div>' : ''}
-        ${d.isExcellent ? '<div style="font-size:11px;color:#16a34a;margin-bottom:2px;">⭐ Excellent condition signals — commands higher Vinted price</div>' : ''}
+
+        <!-- Data row -->
+        <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+          ${d.soldData ? `
+          <div style="flex:1;min-width:200px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;">
+            <div style="font-size:10px;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">✅ Real Sold Data</div>
+            <div style="font-size:12px;color:#166534;">${d.soldData.sampleSize} sold · eBay median <strong>£${d.soldData.ebaySoldMedian}</strong> · Vinted est <strong>£${d.soldData.vintedEstimate}</strong></div>
+          </div>` : ''}
+          ${d.appealScore ? `
+          <div style="flex:1;min-width:200px;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:10px 12px;">
+            <div style="font-size:10px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">🤖 Appeal Check</div>
+            <div style="font-size:12px;color:#5b21b6;">Appeal <strong>${d.appealScore}/10</strong> · Condition <strong>${d.conditionScore}/10</strong></div>
+            <div style="font-size:11px;color:#6d28d9;margin-top:3px;">${d.appealReason || ''}</div>
+          </div>` : ''}
+        </div>
+
+        <!-- Vinted search tip -->
+        ${d.vintedTitle ? `
+        <div style="background:#fefce8;border:1px solid #fde047;border-radius:8px;padding:10px 12px;margin-bottom:14px;">
+          <div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">60 Second Check</div>
+          <div style="font-size:12px;color:#854d0e;font-weight:600;">Search Vinted for: "${d.vintedTitle}"</div>
+          <div style="font-size:11px;color:#78350f;margin-top:3px;">Expect to see similar items at £${Math.round(d.vintedListPrice * 0.85)}–£${Math.round(d.vintedListPrice * 1.2)}. If everything is under £${Math.round(d.vintedListPrice * 0.5)} — skip it.</div>
+        </div>` : ''}
+
       </div>
-      ${d.vintedTitle ? `
-      <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:8px 12px;margin-bottom:10px;">
-        <div style="font-size:9px;text-transform:uppercase;color:#888;margin-bottom:3px;">Suggested Vinted listing title</div>
-        <div style="font-size:12px;font-weight:600;">${d.vintedTitle}</div>
+
+      <!-- Action buttons -->
+      <div style="padding:0 16px 14px;display:flex;gap:8px;">
+        <a href="${d.url}" style="flex:2;background:#111;color:white;padding:10px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;text-align:center;display:block;">View on eBay →</a>
+        <a href="https://www.vinted.co.uk/catalog?search_text=${encodeURIComponent(d.vintedTitle || d.brand)}&order=relevance&currency=GBP" style="flex:1;background:#0891b2;color:white;padding:10px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;text-align:center;display:block;">Vinted</a>
+        <a href="https://www.ebay.co.uk/sch/i.html?_nkw=${encodeURIComponent(d.vintedTitle || d.title)}&LH_Complete=1&LH_Sold=1" style="flex:1;background:#d97706;color:white;padding:10px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;text-align:center;display:block;">Sold</a>
       </div>
-      <div style="background:#fefce8;border:1px solid #fde047;border-radius:6px;padding:8px 12px;margin-bottom:10px;">
-        <div style="font-size:9px;text-transform:uppercase;color:#888;margin-bottom:3px;">60 second Vinted check — search this before buying</div>
-        <div style="font-size:12px;font-weight:700;color:#854d0e;">"${d.vintedTitle}"</div>
-        <div style="font-size:10px;color:#666;margin-top:3px;">You should see similar items listed at around £${Math.round(d.vintedListPrice * 0.85)}–£${Math.round(d.vintedListPrice * 1.2)}. If you do — buy it. If everything is listed at £${Math.round(d.vintedListPrice * 0.5)} or less — skip it.</div>
-      </div>` : ''}
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <a href="${d.url}" style="background:#111;color:white;padding:8px 14px;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600;">View on eBay →</a>
-        <a href="https://www.vinted.co.uk/catalog?search_text=${encodeURIComponent(d.vintedTitle || d.brand)}&order=relevance&currency=GBP" style="background:#0891b2;color:white;padding:8px 14px;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600;">Check Vinted</a>
-        <a href="https://www.ebay.co.uk/sch/i.html?_nkw=${encodeURIComponent(d.vintedTitle || d.title)}&LH_Complete=1&LH_Sold=1" style="background:#d97706;color:white;padding:8px 14px;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600;">eBay Sold</a>
-      </div>
-    </div>
-  `).join('');
+
+    </div>`;
+  }).join('');
 
   return `
-    <div style="max-width:620px;margin:0 auto;font-family:sans-serif;background:#f7f7f5;padding:16px;">
-      <div style="background:#111;color:white;padding:16px 20px;border-radius:10px;margin-bottom:16px;">
-        <div style="font-size:18px;font-weight:700;margin-bottom:4px;">● FlipRadar Alert</div>
-        <div style="font-size:12px;color:rgba(255,255,255,0.6);">${new Date().toLocaleString('en-GB')} · ${mustBuys.length} Must Buy · ${strong.length} Strong · ${possible.length} Possible</div>
+    <div style="max-width:600px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f7f7f5;padding:20px;">
+
+      <!-- Header -->
+      <div style="background:#111;color:white;padding:18px 20px;border-radius:12px;margin-bottom:20px;">
+        <div style="font-size:20px;font-weight:700;letter-spacing:-0.02em;margin-bottom:4px;">● FlipRadar</div>
+        <div style="font-size:13px;color:rgba(255,255,255,0.55);">${new Date().toLocaleString('en-GB', {weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})} · ${deals.length} deal${deals.length !== 1 ? 's' : ''} found</div>
       </div>
-      ${mustBuys.length > 0 ? `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;margin-bottom:12px;font-size:12px;color:#166534;">🎯 <strong>Must Buy deals are confirmed by real eBay sold data AND Claude appeal scoring. Both price AND desirability verified.</strong></div>` : ''}
+
       ${dealHtml}
-      <div style="text-align:center;font-size:10px;color:#999;margin-top:16px;padding:12px;border-top:1px solid #e5e5e0;">
-        FlipRadar UK · Profit = sell price − buy price − £${POSTAGE} postage · Vinted has no seller fees<br>
-        Conservative pricing used — actual Vinted prices may be higher · Always verify before buying
+
+      <!-- Footer -->
+      <div style="text-align:center;font-size:11px;color:#aaa;padding-top:8px;">
+        Profit = list price − buy price − £${POSTAGE} postage · Always verify before buying
       </div>
     </div>
   `;
@@ -639,8 +632,8 @@ async function runScan() {
 
       if (!listings.length) continue;
 
-      // Get eBay sold prices for this search term — real sell price data
-      const soldData = await getSoldPrices(qItem.vintedQ || qItem.q, token);
+      // Get eBay sold prices — use soldQ for accurate category-specific results
+      const soldData = await getSoldPrices(qItem.soldQ || qItem.vintedQ || qItem.q, token);
 
       // Score each listing
       const candidates = [];
