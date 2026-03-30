@@ -274,7 +274,7 @@ async function sendEmailAlert(deals) {
       headers: { 'Authorization': 'Bearer ' + SENDGRID_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         personalizations: [{ to: [{ email: ALERT_EMAIL }] }],
-        from: { email: FROM_EMAIL, name: 'FlipRadar' },
+        from: { email: ALERT_EMAIL, name: 'FlipRadar' },
         subject,
         content: [{ type: 'text/html', value: html }]
       })
