@@ -546,6 +546,7 @@ function buildEmailHtml(deals) {
 
       <!-- Title -->
       <div style="padding:14px 16px 0;">
+        ${d.source && d.source !== 'eBay' ? `<div style="display:inline-block;font-size:10px;font-weight:700;color:${d.isAuction ? '#dc2626' : '#7c3aed'};background:${d.isAuction ? '#fef2f2' : '#f5f3ff'};border:1px solid ${d.isAuction ? '#fecaca' : '#ddd6fe'};border-radius:4px;padding:2px 8px;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">${d.isAuction ? '⏱ ' : ''}${d.source}</div>` : ''}
         <div style="font-size:15px;font-weight:600;color:#111;line-height:1.4;margin-bottom:14px;">${d.title}</div>
 
         <!-- Numbers row -->
@@ -624,16 +625,18 @@ function buildEmailHtml(deals) {
   `;
 }
 
-async function sendAlert(deals) {
+async function sendAlert(deals, isAuctionAlert = false) {
   if (!SENDGRID_KEY || !ALERT_EMAIL) {
     console.log('No email config — skipping alert');
     return;
   }
   const mustBuys = deals.filter(d => d.confidenceTier === 'mustbuy');
   const strong = deals.filter(d => d.confidenceTier === 'strong');
-  const subject = mustBuys.length > 0
-    ? `🎯 ${mustBuys.length} Must Buy deal${mustBuys.length > 1 ? 's' : ''} found — FlipRadar`
-    : `⚡ ${strong.length} Strong deal${strong.length > 1 ? 's' : ''} — FlipRadar`;
+  const subject = isAuctionAlert
+    ? `⏱ ${mustBuys.length} AUCTION ending soon — act now! — FlipRadar`
+    : mustBuys.length > 0
+      ? `🎯 ${mustBuys.length} Must Buy deal${mustBuys.length > 1 ? 's' : ''} found — FlipRadar`
+      : `⚡ ${strong.length} Strong deal${strong.length > 1 ? 's' : ''} — FlipRadar`;
 
   try {
     const r = await fetch('https://api.sendgrid.com/v3/mail/send', {
@@ -657,17 +660,172 @@ async function sendAlert(deals) {
   }
 }
 
-// ── MAIN SCAN FUNCTION ──
+// ── OXFAM ONLINE SCRAPER ──
+// Charity shop staff price by eye — genuine bargains on branded items
+async function scanOxfam(searchTerms) {
+  const results = [];
+  for (const term of searchTerms) {
+    try {
+      const url = 'https://onlineshop.oxfam.org.uk/search?q=' + encodeURIComponent(term) + '&category=clothes';
+      const r = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!r.ok) continue;
+      const html = await r.text();
+
+      // Extract product listings from Oxfam HTML
+      const itemRegex = /<article[^>]*class="[^"]*product[^"]*"[^>]*>([\s\S]*?)<\/article>/gi;
+      const priceRegex = /£([\d.]+)/;
+      const titleRegex = /<h2[^>]*class="[^"]*product[^"]*title[^"]*"[^>]*>\s*<a[^>]*href="([^"]*)"[^>]*>\s*([^<]+)/i;
+
+      let match;
+      while ((match = itemRegex.exec(html)) !== null) {
+        const block = match[1];
+        const priceMatch = block.match(priceRegex);
+        const titleMatch = block.match(titleRegex);
+        if (!priceMatch || !titleMatch) continue;
+
+        const price = parseFloat(priceMatch[1]);
+        const title = titleMatch[2].trim();
+        const path = titleMatch[1];
+        const url = path.startsWith('http') ? path : 'https://onlineshop.oxfam.org.uk' + path;
+
+        if (price > 0 && price <= MAX_BUY_PRICE) {
+          results.push({ title, price, url, source: 'Oxfam', searchTerm: term });
+        }
+      }
+      await new Promise(r => setTimeout(r, 1000)); // Be respectful
+    } catch (e) {
+      console.log('Oxfam error for "' + term + '":', e.message);
+    }
+  }
+  return results;
+}
+
+// ── PRELOVED SCRAPER ──
+// UK classified ads — private sellers with no idea of values
+async function scanPreloved(searchTerms) {
+  const results = [];
+  for (const term of searchTerms) {
+    try {
+      const url = 'https://www.preloved.co.uk/classifieds/all/uk?keywords=' + encodeURIComponent(term) + '&category=clothes-accessories';
+      const r = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!r.ok) continue;
+      const html = await r.text();
+
+      // Extract listings from Preloved HTML
+      const itemRegex = /<div[^>]*class="[^"]*ad[^"]*item[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
+      const priceRegex = /£([\d,]+(?:\.\d{2})?)/;
+      const titleRegex = /<a[^>]*class="[^"]*ad[^"]*title[^"]*"[^>]*href="([^"]*)"[^>]*>([^<]+)/i;
+
+      let match;
+      while ((match = itemRegex.exec(html)) !== null) {
+        const block = match[1];
+        const priceMatch = block.match(priceRegex);
+        const titleMatch = block.match(titleRegex);
+        if (!priceMatch || !titleMatch) continue;
+
+        const price = parseFloat(priceMatch[1].replace(',', ''));
+        const title = titleMatch[2].trim();
+        const path = titleMatch[1];
+        const url = path.startsWith('http') ? path : 'https://www.preloved.co.uk' + path;
+
+        if (price > 0 && price <= MAX_BUY_PRICE) {
+          results.push({ title, price, url, source: 'Preloved', searchTerm: term });
+        }
+      }
+      await new Promise(r => setTimeout(r, 1000));
+    } catch (e) {
+      console.log('Preloved error for "' + term + '":', e.message);
+    }
+  }
+  return results;
+}
+
+// ── EBAY AUCTION SCANNER ──
+// Zero-bid auctions ending within 4 hours — catches items going for pennies
+async function scanAuctions(token) {
+  const results = [];
+  const auctionSearches = [
+    { q: 'Nike vintage hoodie sweatshirt', brand: 'Nike', avgSell: 42, minProfit: 15, vintedQ: 'Nike vintage hoodie', soldQ: 'Nike vintage hoodie sweatshirt', cat: 'nike' },
+    { q: 'Adidas Samba trainers', brand: 'Adidas', avgSell: 65, minProfit: 18, vintedQ: 'Adidas Samba', soldQ: 'Adidas Samba trainers shoes', cat: 'trainers', catId: '15709' },
+    { q: 'Patagonia fleece jacket', brand: 'Patagonia', avgSell: 65, minProfit: 20, vintedQ: 'Patagonia fleece', soldQ: 'Patagonia fleece jacket half zip', cat: 'outerwear', catId: '57988' },
+    { q: 'North Face fleece jacket', brand: 'North Face', avgSell: 55, minProfit: 18, vintedQ: 'North Face fleece', soldQ: 'North Face fleece jacket', cat: 'outerwear', catId: '57988' },
+    { q: 'Barbour wax jacket', brand: 'Barbour', avgSell: 80, minProfit: 25, vintedQ: 'Barbour wax jacket', soldQ: 'Barbour wax jacket mens', cat: 'outerwear', catId: '57988' },
+    { q: 'Dr Martens boots', brand: 'Dr Martens', avgSell: 70, minProfit: 22, vintedQ: 'Dr Martens boots', soldQ: 'Dr Martens boots leather', cat: 'boots', catId: '62108' },
+    { q: 'Stone Island Junior jacket', brand: 'Stone Island Junior', avgSell: 85, minProfit: 25, vintedQ: 'Stone Island Junior jacket', soldQ: 'Stone Island Junior jacket kids', cat: 'kids', catId: '11484' },
+    { q: 'Levi 501 jeans', brand: "Levi's", avgSell: 45, minProfit: 15, vintedQ: "Levi's 501 jeans", soldQ: "Levi's 501 jeans", cat: 'denim', catId: '15689' },
+    { q: 'Arc teryx jacket', brand: "Arc'teryx", avgSell: 120, minProfit: 35, vintedQ: "Arc'teryx jacket", soldQ: "Arc'teryx jacket", cat: 'gorpcore', catId: '57988' },
+    { q: 'Salomon trainers shoes', brand: 'Salomon', avgSell: 80, minProfit: 25, vintedQ: 'Salomon trainers', soldQ: 'Salomon trainers trail running shoes', cat: 'trainers', catId: '15709' },
+  ];
+
+  for (const qItem of auctionSearches) {
+    try {
+      const q = encodeURIComponent(qItem.q);
+      const catFilter = qItem.catId ? '&category_ids=' + qItem.catId : '';
+
+      // Search for auctions ending within 4 hours with 0-1 bids
+      const r = await fetch(
+        'https://api.ebay.com/buy/browse/v1/item_summary/search?q=' + q +
+        '&limit=10&marketplace_ids=EBAY_GB' +
+        '&filter=price:[1..' + MAX_BUY_PRICE + '],priceCurrency:GBP,itemLocationCountry:GB,buyingOptions:{AUCTION},itemEndDate:[..' + new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString() + ']' +
+        catFilter +
+        '&sort=endDateSoonest', {
+        headers: { 'Authorization': 'Bearer ' + token, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_GB' },
+        signal: AbortSignal.timeout(10000)
+      });
+
+      if (!r.ok) continue;
+      const data = await r.json();
+      const listings = (data.itemSummaries || []).filter(i => !shouldReject(i));
+
+      for (const listing of listings) {
+        // Only zero or very low bid count
+        const bidCount = listing.bidCount || 0;
+        if (bidCount > 2) continue;
+
+        const hoursLeft = listing.itemEndDate
+          ? Math.round((new Date(listing.itemEndDate) - Date.now()) / 3600000 * 10) / 10
+          : null;
+
+        results.push({
+          ...listing,
+          queueItem: qItem,
+          hoursLeft,
+          bidCount,
+          source: 'eBay Auction',
+          isAuction: true
+        });
+      }
+      await new Promise(r => setTimeout(r, 500));
+    } catch (e) {
+      console.log('Auction scan error:', e.message);
+    }
+  }
+  return results;
+}
+
 async function runScan() {
+  if (scanRunning) {
+    console.log('Scan already in progress — skipping duplicate');
+    return;
+  }
+  scanRunning = true;
+
   const hour = new Date().getHours();
   if (hour >= 0 && hour < 7) {
     console.log('Night mode — paused until 7am');
+    scanRunning = false;
     return;
   }
 
   console.log('Scan started at ' + new Date().toLocaleString('en-GB'));
   let token;
-  try { token = await getToken(); } catch (e) { console.error('Token error:', e.message); return; }
+  try { token = await getToken(); } catch (e) { console.error('Token error:', e.message); scanRunning = false; return; }
 
   const alertDeals = [];
 
@@ -766,21 +924,93 @@ async function runScan() {
     }
   }
 
-  const mustBuyCount = alertDeals.filter(d => d.confidenceTier === 'mustbuy').length;
-  console.log('Scan complete — ' + alertDeals.length + ' deals (' + mustBuyCount + ' Must Buy)');
+  // ── OXFAM SCAN ──
+  console.log('Scanning Oxfam Online...');
+  const oxfamTerms = ['Nike vintage hoodie', 'Adidas Samba', 'Barbour wax jacket', 'Patagonia fleece', 'North Face jacket', 'Dr Martens boots', 'Stone Island', 'Levi 501', 'Ralph Lauren polo', 'Lacoste polo', 'Arc teryx', 'Carhartt WIP'];
+  const oxfamItems = await scanOxfam(oxfamTerms);
+  console.log('Oxfam: ' + oxfamItems.length + ' items found under £' + MAX_BUY_PRICE);
 
-  if (alertDeals.length > 0) {
-    // Only email Must Buy — Strong deals are discarded to reduce noise
-    const mustBuysOnly = alertDeals.filter(d => d.confidenceTier === 'mustbuy');
-    if (mustBuysOnly.length > 0) {
-      mustBuysOnly.sort((a, b) => b.confidenceScore - a.confidenceScore);
-      await sendAlert(mustBuysOnly.slice(0, 5)); // Max 5 per email
-    } else {
-      console.log('No Must Buy deals this scan — skipping email');
+  for (const item of oxfamItems) {
+    if (alertedIds.has('oxfam-' + item.url)) continue;
+    // Find matching queue item for sold price lookup
+    const qMatch = QUEUE.find(q => item.title.toLowerCase().includes(q.brand.toLowerCase())) || QUEUE[0];
+    const soldData = await getSoldPrices(qMatch.soldQ || item.searchTerm, token);
+    const deal = scoreDeal(
+      { title: item.title, price: { value: item.price }, itemWebUrl: item.url, itemId: 'oxfam-' + encodeURIComponent(item.url) },
+      null, qMatch, soldData
+    );
+    if (deal && deal.confidenceTier === 'mustbuy' && deal.roi >= 150) {
+      deal.source = 'Oxfam Online';
+      deal.id = 'oxfam-' + encodeURIComponent(item.url);
+      alertDeals.push(deal);
+      alertedIds.add(deal.id);
+      console.log('[OXFAM MUSTBUY] ' + item.title.substring(0, 50) + ' — £' + item.price + ' (+£' + deal.vintedNet + ')');
     }
   }
 
+  // ── PRELOVED SCAN ──
+  console.log('Scanning Preloved...');
+  const prelovedTerms = ['Nike vintage hoodie', 'Adidas Samba trainers', 'Barbour wax jacket', 'Patagonia jacket', 'Dr Martens boots', 'Stone Island jacket', 'Levi 501 jeans', 'North Face jacket'];
+  const prelovedItems = await scanPreloved(prelovedTerms);
+  console.log('Preloved: ' + prelovedItems.length + ' items found under £' + MAX_BUY_PRICE);
+
+  for (const item of prelovedItems) {
+    if (alertedIds.has('preloved-' + item.url)) continue;
+    const qMatch = QUEUE.find(q => item.title.toLowerCase().includes(q.brand.toLowerCase())) || QUEUE[0];
+    const soldData = await getSoldPrices(qMatch.soldQ || item.searchTerm, token);
+    const deal = scoreDeal(
+      { title: item.title, price: { value: item.price }, itemWebUrl: item.url, itemId: 'preloved-' + encodeURIComponent(item.url) },
+      null, qMatch, soldData
+    );
+    if (deal && deal.confidenceTier === 'mustbuy' && deal.roi >= 150) {
+      deal.source = 'Preloved';
+      deal.id = 'preloved-' + encodeURIComponent(item.url);
+      alertDeals.push(deal);
+      alertedIds.add(deal.id);
+      console.log('[PRELOVED MUSTBUY] ' + item.title.substring(0, 50) + ' — £' + item.price + ' (+£' + deal.vintedNet + ')');
+    }
+  }
+
+  // ── EBAY AUCTION SCAN — instant alert for ending soon ──
+  console.log('Scanning eBay auctions ending within 4 hours...');
+  const auctionItems = await scanAuctions(token);
+  console.log('Auctions: ' + auctionItems.length + ' zero/low-bid items found');
+
+  const auctionDeals = [];
+  for (const item of auctionItems) {
+    if (alertedIds.has(item.itemId)) continue;
+    const soldData = await getSoldPrices(item.queueItem.soldQ, token);
+    const deal = scoreDeal(item, null, item.queueItem, soldData);
+    if (deal && deal.confidenceTier === 'mustbuy') {
+      deal.source = 'eBay Auction ⏱ ' + item.hoursLeft + 'h left · ' + item.bidCount + ' bids';
+      deal.isAuction = true;
+      deal.hoursLeft = item.hoursLeft;
+      auctionDeals.push(deal);
+      alertedIds.add(item.itemId);
+      console.log('[AUCTION] ' + deal.title.substring(0, 45) + ' — £' + deal.price + ' · ' + item.hoursLeft + 'h left · ' + item.bidCount + ' bids');
+    }
+  }
+
+  // Send instant auction alert if any found — separate from regular email
+  if (auctionDeals.length > 0) {
+    console.log('Sending instant auction alert — ' + auctionDeals.length + ' deals');
+    await sendAlert(auctionDeals.slice(0, 5), true);
+  }
+
+  // ── REGULAR EMAIL — best Must Buys from all sources ──
+  const mustBuyCount = alertDeals.filter(d => d.confidenceTier === 'mustbuy').length;
+  console.log('Scan complete — ' + alertDeals.length + ' deals (' + mustBuyCount + ' Must Buy) across eBay + Oxfam + Preloved');
+
+  const mustBuysOnly = alertDeals.filter(d => d.confidenceTier === 'mustbuy');
+  if (mustBuysOnly.length > 0) {
+    mustBuysOnly.sort((a, b) => b.confidenceScore - a.confidenceScore);
+    await sendAlert(mustBuysOnly.slice(0, 5));
+  } else {
+    console.log('No Must Buy deals this scan — skipping email');
+  }
+
   if (alertedIds.size > 800) alertedIds.clear();
+  scanRunning = false;
 }
 
 // ── SCHEDULE: Every 60 minutes ──
