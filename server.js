@@ -809,6 +809,8 @@ async function scanAuctions(token) {
   return results;
 }
 
+let scanRunning = false;
+
 async function runScan() {
   if (scanRunning) {
     console.log('Scan already in progress — skipping duplicate');
