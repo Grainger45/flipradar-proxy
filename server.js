@@ -666,40 +666,74 @@ async function scanOxfam(searchTerms) {
   const results = [];
   for (const term of searchTerms) {
     try {
-      const url = 'https://onlineshop.oxfam.org.uk/search?q=' + encodeURIComponent(term) + '&category=clothes';
+      // Use Oxfam's search with JSON-friendly params
+      const url = 'https://onlineshop.oxfam.org.uk/search?q=' + encodeURIComponent(term) + '&category=clothes&instock=true';
       const r = await fetch(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-        signal: AbortSignal.timeout(10000)
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-GB,en;q=0.5',
+        },
+        signal: AbortSignal.timeout(12000)
       });
-      if (!r.ok) continue;
+      if (!r.ok) { console.log('Oxfam HTTP ' + r.status + ' for: ' + term); continue; }
       const html = await r.text();
 
-      // Extract product listings from Oxfam HTML
-      const itemRegex = /<article[^>]*class="[^"]*product[^"]*"[^>]*>([\s\S]*?)<\/article>/gi;
-      const priceRegex = /£([\d.]+)/;
-      const titleRegex = /<h2[^>]*class="[^"]*product[^"]*title[^"]*"[^>]*>\s*<a[^>]*href="([^"]*)"[^>]*>\s*([^<]+)/i;
+      // Oxfam product cards — extract title, price and URL
+      // Products appear as: /product-title/product/HD_XXXXXXXX
+      const productRegex = /href="(\/[^"]+\/product\/HD_\d+)"[^>]*>\s*<[^>]+>\s*([^<]{5,80})<\/[^>]+>[\s\S]{0,500}?£([\d.]+)/gi;
 
       let match;
-      while ((match = itemRegex.exec(html)) !== null) {
-        const block = match[1];
-        const priceMatch = block.match(priceRegex);
-        const titleMatch = block.match(titleRegex);
-        if (!priceMatch || !titleMatch) continue;
+      const seen = new Set();
+      while ((match = productRegex.exec(html)) !== null) {
+        const path = match[1];
+        const title = match[2].trim();
+        const price = parseFloat(match[3]);
+        if (seen.has(path)) continue;
+        seen.add(path);
 
-        const price = parseFloat(priceMatch[1]);
-        const title = titleMatch[2].trim();
-        const path = titleMatch[1];
-        const url = path.startsWith('http') ? path : 'https://onlineshop.oxfam.org.uk' + path;
-
-        if (price > 0 && price <= MAX_BUY_PRICE) {
-          results.push({ title, price, url, source: 'Oxfam', searchTerm: term });
+        if (price > 0 && price <= MAX_BUY_PRICE && title.length > 5) {
+          results.push({
+            title,
+            price,
+            url: 'https://onlineshop.oxfam.org.uk' + path,
+            source: 'Oxfam Online',
+            searchTerm: term
+          });
         }
       }
-      await new Promise(r => setTimeout(r, 1000)); // Be respectful
+
+      // Fallback: simpler price+title extraction
+      if (results.filter(r => r.searchTerm === term).length === 0) {
+        const priceBlocks = html.match(/class="[^"]*price[^"]*"[^>]*>[\s£]*([\d.]+)/gi) || [];
+        const titleBlocks = html.match(/class="[^"]*product[^"]*title[^"]*"[^>]*>([^<]{5,80})</gi) || [];
+        const urlBlocks = html.match(/href="(\/[^"]+\/product\/HD_\d+)"/gi) || [];
+
+        const count = Math.min(priceBlocks.length, titleBlocks.length, urlBlocks.length);
+        for (let i = 0; i < count; i++) {
+          const priceMatch = priceBlocks[i].match(/([\d.]+)/);
+          const titleMatch = titleBlocks[i].match(/>([^<]{5,80})</);
+          const urlMatch = urlBlocks[i].match(/href="([^"]+)"/);
+          if (!priceMatch || !titleMatch || !urlMatch) continue;
+          const price = parseFloat(priceMatch[1]);
+          if (price > 0 && price <= MAX_BUY_PRICE) {
+            results.push({
+              title: titleMatch[1].trim(),
+              price,
+              url: 'https://onlineshop.oxfam.org.uk' + urlMatch[1],
+              source: 'Oxfam Online',
+              searchTerm: term
+            });
+          }
+        }
+      }
+
+      await new Promise(r => setTimeout(r, 1500));
     } catch (e) {
       console.log('Oxfam error for "' + term + '":', e.message);
     }
   }
+  console.log('Oxfam raw results: ' + results.length);
   return results;
 }
 
@@ -709,40 +743,44 @@ async function scanPreloved(searchTerms) {
   const results = [];
   for (const term of searchTerms) {
     try {
-      const url = 'https://www.preloved.co.uk/classifieds/all/uk?keywords=' + encodeURIComponent(term) + '&category=clothes-accessories';
+      const url = 'https://www.preloved.co.uk/classifieds/all/uk?keywords=' + encodeURIComponent(term);
       const r = await fetch(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-        signal: AbortSignal.timeout(10000)
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-GB,en;q=0.5',
+        },
+        signal: AbortSignal.timeout(12000)
       });
-      if (!r.ok) continue;
+      if (!r.ok) { console.log('Preloved HTTP ' + r.status + ' for: ' + term); continue; }
       const html = await r.text();
 
-      // Extract listings from Preloved HTML
-      const itemRegex = /<div[^>]*class="[^"]*ad[^"]*item[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
-      const priceRegex = /£([\d,]+(?:\.\d{2})?)/;
-      const titleRegex = /<a[^>]*class="[^"]*ad[^"]*title[^"]*"[^>]*href="([^"]*)"[^>]*>([^<]+)/i;
-
+      // Extract ad listings — title, price, URL
+      const adRegex = /href="(\/classifieds\/\d+[^"]*)"[^>]*>([^<]{5,80})<\/a>[\s\S]{0,300}?£\s*([\d,]+(?:\.\d{2})?)/gi;
       let match;
-      while ((match = itemRegex.exec(html)) !== null) {
-        const block = match[1];
-        const priceMatch = block.match(priceRegex);
-        const titleMatch = block.match(titleRegex);
-        if (!priceMatch || !titleMatch) continue;
-
-        const price = parseFloat(priceMatch[1].replace(',', ''));
-        const title = titleMatch[2].trim();
-        const path = titleMatch[1];
-        const url = path.startsWith('http') ? path : 'https://www.preloved.co.uk' + path;
-
-        if (price > 0 && price <= MAX_BUY_PRICE) {
-          results.push({ title, price, url, source: 'Preloved', searchTerm: term });
+      const seen = new Set();
+      while ((match = adRegex.exec(html)) !== null) {
+        const path = match[1];
+        const title = match[2].trim();
+        const price = parseFloat(match[3].replace(',', ''));
+        if (seen.has(path)) continue;
+        seen.add(path);
+        if (price > 0 && price <= MAX_BUY_PRICE && title.length > 5) {
+          results.push({
+            title,
+            price,
+            url: 'https://www.preloved.co.uk' + path,
+            source: 'Preloved',
+            searchTerm: term
+          });
         }
       }
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 1500));
     } catch (e) {
       console.log('Preloved error for "' + term + '":', e.message);
     }
   }
+  console.log('Preloved raw results: ' + results.length);
   return results;
 }
 
@@ -929,7 +967,13 @@ async function runScan() {
   // ── OXFAM SCAN ──
   console.log('Scanning Oxfam Online...');
   const oxfamTerms = ['Nike vintage hoodie', 'Adidas Samba', 'Barbour wax jacket', 'Patagonia fleece', 'North Face jacket', 'Dr Martens boots', 'Stone Island', 'Levi 501', 'Ralph Lauren polo', 'Lacoste polo', 'Arc teryx', 'Carhartt WIP'];
-  const oxfamItems = await scanOxfam(oxfamTerms);
+  let oxfamItems = [];
+  try {
+    oxfamItems = await Promise.race([
+      scanOxfam(oxfamTerms),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Oxfam timeout')), 30000))
+    ]);
+  } catch (e) { console.log('Oxfam scan skipped:', e.message); }
   console.log('Oxfam: ' + oxfamItems.length + ' items found under £' + MAX_BUY_PRICE);
 
   for (const item of oxfamItems) {
@@ -953,7 +997,13 @@ async function runScan() {
   // ── PRELOVED SCAN ──
   console.log('Scanning Preloved...');
   const prelovedTerms = ['Nike vintage hoodie', 'Adidas Samba trainers', 'Barbour wax jacket', 'Patagonia jacket', 'Dr Martens boots', 'Stone Island jacket', 'Levi 501 jeans', 'North Face jacket'];
-  const prelovedItems = await scanPreloved(prelovedTerms);
+  let prelovedItems = [];
+  try {
+    prelovedItems = await Promise.race([
+      scanPreloved(prelovedTerms),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Preloved timeout')), 30000))
+    ]);
+  } catch (e) { console.log('Preloved scan skipped:', e.message); }
   console.log('Preloved: ' + prelovedItems.length + ' items found under £' + MAX_BUY_PRICE);
 
   for (const item of prelovedItems) {
