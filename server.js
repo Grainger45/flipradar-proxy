@@ -176,7 +176,11 @@ const HARD_REJECT = [
   'keyring','book','magazine','dvd','photo','trading card','ticket',
   'figurine','dirty','heavily worn','major stain','ripped','torn',
   'broken zip','bundle of badges','job lot badges','charm','laces',
-  'insoles','tongue','spare part','parts only','spares repair'
+  'insoles','tongue','spare part','parts only','spares repair',
+  'label only','replacement label','spare label','coat label',
+  'wax label','care label','swing tag','hang tag','swing label',
+  'box only','dust bag only','authenticity card','care card',
+  'button only','zip only','buckle only','strap only'
 ];
 
 const COND_WARN = [
@@ -226,6 +230,14 @@ function shouldReject(item, queueItem) {
   const text = ((item.title || '') + ' ' + (item.condition || '')).toLowerCase();
   if (item.itemLocation?.country && item.itemLocation.country !== 'GB') return true;
   if (HARD_REJECT.some(w => text.includes(w))) return true;
+
+  // Reject if title contains "label" near a brand name — catches "Barbour label", "coat label" etc
+  if (text.includes('label') || text.includes('hang tag') || text.includes('swing tag')) return true;
+
+  // Sanity check — premium brands should never be under £3
+  const price = parseFloat(item.price?.value || item.price || 0);
+  const premiumBrands = ['barbour','patagonia','arc teryx','stone island','moncler','canada goose','burberry'];
+  if (price < 3 && premiumBrands.some(b => text.includes(b))) return true;
 
   // Reject small/kids shoe sizes for footwear searches
   const isFootwear = queueItem && ['trainers','boots'].includes(queueItem.cat);
@@ -802,10 +814,11 @@ const VINTED_TARGETS = [
   { search: 'Arc teryx jacket', brand: "Arc'teryx", avgSell: 120, minProfit: 40, cat: 'gorpcore' },
 ];
 
-async function scanVinted() {
+async function scanVinted(targets) {
+  const searchTargets = targets || VINTED_TARGETS;
   const results = [];
 
-  for (const target of VINTED_TARGETS) {
+  for (const target of searchTargets) {
     try {
       // Calculate max buy price to generate meaningful profit
       // Buy price must be below (avgSell - minProfit - POSTAGE)
@@ -1125,63 +1138,6 @@ async function runScan() {
     }
   }
 
-  // ── VINTED SCAN — scan Vinted directly for underpriced items ──
-  console.log('Scanning Vinted for underpriced items...');
-  let vintedItems = [];
-  try {
-    vintedItems = await Promise.race([
-      scanVinted(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Vinted scan timeout')), 300000))
-    ]);
-  } catch (e) { console.log('Vinted scan skipped:', e.message); }
-
-  for (const item of vintedItems) {
-    if (alertedIds.has('vinted-' + item.itemId)) continue;
-
-    const netProfit = item.avgSell - item.price - POSTAGE;
-    const roi = Math.round((netProfit / item.price) * 100);
-
-    if (netProfit < item.minProfit || roi < MIN_ROI) continue;
-
-    // Score with Claude if profit is strong
-    let appealData = null;
-    if (roi >= 150 && ANTHROPIC_KEY) {
-      appealData = await scoreAppeal(item.title, item.brand, item.cat, 'listed on Vinted', item.price);
-    }
-
-    const dealId = 'vinted-' + item.itemId;
-    const deal = {
-      id: dealId,
-      title: item.title,
-      price: item.price,
-      vintedListPrice: item.avgSell,
-      vintedNet: Math.round(netProfit * 100) / 100,
-      roi,
-      brand: item.brand,
-      cat: item.cat,
-      url: item.url,
-      source: '🔍 Vinted Underpriced',
-      confidenceTier: 'mustbuy',
-      confidenceScore: 80,
-      confidenceReasons: ['✅ Listed on Vinted below market value', '✅ Buy on Vinted, relist higher'],
-      soldData: { isReal: false, sampleSize: 0, ebaySoldMedian: item.avgSell, vintedEstimate: item.avgSell },
-      vintedDataSource: 'research',
-      appealScore: appealData?.appeal || null,
-      conditionScore: appealData?.condition || null,
-      appealReason: appealData?.appealReason || null,
-      conditionReason: appealData?.conditionReason || null,
-      isVintedSource: true
-    };
-
-    if (appealData) {
-      deal.confidenceReasons.push('✅ Appeal ' + appealData.appeal + '/10 — ' + appealData.appealReason);
-    }
-
-    alertDeals.push(deal);
-    alertedIds.add(dealId);
-    console.log('[VINTED] ' + item.title.substring(0, 50) + ' — £' + item.price + ' → relist £' + item.avgSell + ' (+£' + Math.round(netProfit) + ')');
-  }
-
   // ── OXFAM SCAN ──
   console.log('Scanning Oxfam Online...');
   const oxfamTerms = ['Nike vintage hoodie', 'Adidas Samba', 'Barbour wax jacket', 'Patagonia fleece', 'North Face jacket', 'Dr Martens boots', 'Stone Island', 'Levi 501', 'Ralph Lauren polo', 'Lacoste polo', 'Arc teryx', 'Carhartt WIP'];
@@ -1253,10 +1209,91 @@ async function runScan() {
   scanRunning = false;
 }
 
-// ── SCHEDULE: Every 60 minutes ──
+// ── VINTED SCAN — runs every 30 minutes, rotates through targets ──
+let vintedScanRunning = false;
+let vintedTargetIndex = 0; // Tracks which searches to run next
+
+async function runVintedScan() {
+  if (vintedScanRunning) return;
+  vintedScanRunning = true;
+
+  // Run 3 searches per cycle, rotating through all targets
+  const batchSize = 3;
+  const batch = [];
+  for (let i = 0; i < batchSize; i++) {
+    batch.push(VINTED_TARGETS[vintedTargetIndex % VINTED_TARGETS.length]);
+    vintedTargetIndex++;
+  }
+
+  console.log('Vinted scan — batch: ' + batch.map(t => t.search).join(', '));
+
+  try {
+    const token = await getToken();
+    const vintedItems = await scanVinted(batch);
+    const vintedDeals = [];
+
+    for (const item of vintedItems) {
+      if (alertedIds.has('vinted-' + item.itemId)) continue;
+      const netProfit = item.avgSell - item.price - POSTAGE;
+      const roi = Math.round((netProfit / item.price) * 100);
+      if (netProfit < item.minProfit || roi < MIN_ROI) continue;
+
+      let appealData = null;
+      if (roi >= 150 && ANTHROPIC_KEY) {
+        appealData = await scoreAppeal(item.title, item.brand, item.cat, 'listed on Vinted', item.price);
+      }
+
+      const dealId = 'vinted-' + item.itemId;
+      const deal = {
+        id: dealId,
+        title: item.title,
+        price: item.price,
+        vintedListPrice: item.avgSell,
+        vintedNet: Math.round(netProfit * 100) / 100,
+        roi,
+        brand: item.brand,
+        cat: item.cat,
+        url: item.url,
+        source: '🔍 Vinted Underpriced — Buy & Relist',
+        confidenceTier: 'mustbuy',
+        confidenceScore: 85,
+        confidenceReasons: ['✅ Listed on Vinted below market value', '✅ Buy on Vinted, relist higher for profit'],
+        soldData: { isReal: false, sampleSize: 0, ebaySoldMedian: item.avgSell, vintedEstimate: item.avgSell },
+        vintedDataSource: 'research',
+        appealScore: appealData?.appeal || null,
+        conditionScore: appealData?.condition || null,
+        appealReason: appealData?.appealReason || null,
+        conditionReason: appealData?.conditionReason || null,
+        isVintedSource: true
+      };
+
+      vintedDeals.push(deal);
+      alertedIds.add(dealId);
+      console.log('[VINTED DEAL] ' + item.title.substring(0, 50) + ' — £' + item.price + ' → relist £' + item.avgSell + ' (+£' + Math.round(netProfit) + ')');
+    }
+
+    if (vintedDeals.length > 0) {
+      console.log('Sending Vinted alert — ' + vintedDeals.length + ' underpriced items');
+      await sendAlert(vintedDeals.slice(0, 5));
+    } else {
+      console.log('Vinted batch complete — no underpriced items this run');
+    }
+  } catch (e) {
+    console.error('Vinted scan error:', e.message);
+  }
+
+  vintedScanRunning = false;
+}
+
+// ── SCHEDULE: eBay every 60 minutes, Vinted every 30 minutes ──
 async function scheduledScan() {
   await runScan();
   setTimeout(scheduledScan, 60 * 60 * 1000);
+}
+
+async function scheduledVintedScan() {
+  await runVintedScan();
+  setTimeout(scheduledVintedScan, 30 * 60 * 1000);
 }
 
 // ── ENDPOINTS ──
@@ -1325,11 +1362,17 @@ app.get('/deals', async (req, res) => {
   }
 });
 
+app.get('/scan-vinted', (req, res) => {
+  res.json({ message: 'Vinted scan started — check logs and email in ~10 minutes' });
+  runVintedScan();
+});
+
 app.listen(process.env.PORT || 3000, () => {
   console.log('FlipRadar bot running');
   console.log('Alert email: ' + (ALERT_EMAIL || 'NOT SET'));
   console.log('Email service: ' + (SENDGRID_KEY ? 'SendGrid ready' : 'NOT SET'));
   console.log('Queue: ' + QUEUE.length + ' searches');
   console.log('Max buy price: £' + MAX_BUY_PRICE);
-  setTimeout(scheduledScan, 30000);
+  setTimeout(scheduledScan, 30000);           // eBay scan starts after 30s
+  setTimeout(scheduledVintedScan, 60000);     // Vinted scan starts after 60s
 });
