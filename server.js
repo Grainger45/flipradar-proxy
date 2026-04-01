@@ -1088,7 +1088,11 @@ async function runScan() {
       const isFootwear = ['trainers', 'boots'].includes(qItem.cat);
       const minCondScore = isFootwear ? 8 : 7;
 
-      for (const deal of candidates) {
+      // Sort by ROI descending — only score top 2 per search to keep scan fast
+      candidates.sort((a, b) => b.roi - a.roi);
+      const toScore = candidates.slice(0, 2);
+
+      for (const deal of toScore) {
         if (deal.confidenceTier === 'strong' || deal.roi < 150) {
           alertDeals.push(deal);
           alertedIds.add(deal.id);
@@ -1097,8 +1101,8 @@ async function runScan() {
         }
 
         try {
-          // Get image URL from the listing for visual condition check
-          const imageUrl = deal.image || null;
+          // Only pass image URL for footwear where condition is critical
+          const imageUrl = isFootwear ? (deal.image || null) : null;
           const appeal = await scoreAppeal(deal.title, deal.brand, deal.cat, deal.condition, deal.price, imageUrl);
 
           if (!appeal) {
