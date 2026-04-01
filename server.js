@@ -719,17 +719,23 @@ async function scanOxfam(searchTerms) {
   const results = [];
   for (const term of searchTerms) {
     try {
-      // Oxfam's actual search API endpoint
+      // Correct API endpoint found by inspecting real browser requests
+      // N=1807395125 = donated/preloved category filter
+      // Ns=product.creationDate|1 = newest first
       const url = 'https://onlineshop.oxfam.org.uk/ccstoreui/v1/assembler/assemble?' +
-        'Ntt=' + encodeURIComponent(term) +
-        '&No=0&Nrpp=24&Nr=AND(product.active:1,NOT(sku.listPrice:0.000000))' +
-        '&fields=products.displayName,products.salePrice,products.listPrice,products.route';
+        'N=1807395125' +
+        '&Nf=sku.listPrice%7CGT+0' +
+        '&Ns=product.creationDate%7C1' +
+        '&Nr=AND(product.active%3A1%2CNOT(sku.listPrice%3A0.000000))' +
+        '&No=0&Nrpp=24' +
+        '&Ntt=' + encodeURIComponent(term);
 
       const r = await fetch(url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': 'application/json',
+          'Accept': 'application/json, text/javascript, */*',
           'X-CCAsset-Language': 'en',
+          'Referer': 'https://onlineshop.oxfam.org.uk/donated/category/donated'
         },
         signal: AbortSignal.timeout(12000)
       });
@@ -737,12 +743,13 @@ async function scanOxfam(searchTerms) {
       if (!r.ok) { console.log('Oxfam API HTTP ' + r.status + ' for: ' + term); continue; }
       const data = await r.json();
 
-      // Extract products from response
-      const products = data?.resultsList?.records || data?.products || [];
-      for (const p of products) {
-        const title = p.displayName || p['product.displayName'] || '';
-        const price = parseFloat(p.salePrice || p.listPrice || p['sku.salePrice'] || 0);
-        const route = p.route || p['product.route'] || '';
+      // Navigate the response structure — products are in resultsList
+      const records = data?.resultsList?.records || [];
+      for (const record of records) {
+        const attrs = record?.attributes || {};
+        const title = attrs['product.displayName']?.[0] || '';
+        const price = parseFloat(attrs['sku.salePrice']?.[0] || attrs['sku.listPrice']?.[0] || 0);
+        const route = attrs['product.route']?.[0] || '';
 
         if (title && price > 0 && price <= MAX_BUY_PRICE) {
           results.push({
@@ -754,6 +761,24 @@ async function scanOxfam(searchTerms) {
           });
         }
       }
+
+      // Also try top-level products array
+      const products = data?.products || data?.resultsList?.products || [];
+      for (const p of products) {
+        const title = p.displayName || p.name || '';
+        const price = parseFloat(p.salePrice || p.listPrice || 0);
+        const route = p.route || p.url || '';
+        if (title && price > 0 && price <= MAX_BUY_PRICE) {
+          results.push({
+            title,
+            price,
+            url: 'https://onlineshop.oxfam.org.uk' + (route.startsWith('/') ? route : '/' + route),
+            source: 'Oxfam Online',
+            searchTerm: term
+          });
+        }
+      }
+
       await new Promise(r => setTimeout(r, 1000));
     } catch (e) {
       console.log('Oxfam error for "' + term + '":', e.message);
