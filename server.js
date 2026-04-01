@@ -788,6 +788,175 @@ async function scanOxfam(searchTerms) {
   return results;
 }
 
+// ── VINTED SCANNER ──
+// Scans Vinted directly for underpriced items — biggest information gap in resale
+// Vinted sellers are casual and frequently underprice premium brands
+const VINTED_TARGETS = [
+  { search: 'Patagonia fleece jacket', brand: 'Patagonia', avgSell: 65, minProfit: 20, cat: 'outerwear' },
+  { search: 'Patagonia down jacket', brand: 'Patagonia', avgSell: 90, minProfit: 30, cat: 'outerwear' },
+  { search: 'North Face fleece jacket', brand: 'North Face', avgSell: 55, minProfit: 18, cat: 'outerwear' },
+  { search: 'North Face puffer jacket', brand: 'North Face', avgSell: 70, minProfit: 22, cat: 'outerwear' },
+  { search: 'Barbour wax jacket', brand: 'Barbour', avgSell: 80, minProfit: 25, cat: 'outerwear' },
+  { search: 'Arc teryx jacket', brand: "Arc'teryx", avgSell: 120, minProfit: 40, cat: 'gorpcore' },
+  { search: 'Carhartt WIP jacket', brand: 'Carhartt WIP', avgSell: 55, minProfit: 18, cat: 'outerwear' },
+  { search: 'Stone Island jacket', brand: 'Stone Island', avgSell: 120, minProfit: 40, cat: 'outerwear' },
+  { search: 'Stone Island Junior jacket', brand: 'Stone Island Junior', avgSell: 85, minProfit: 28, cat: 'kids' },
+  { search: 'CP Company jacket', brand: 'CP Company', avgSell: 95, minProfit: 30, cat: 'outerwear' },
+  { search: 'Moncler jacket kids', brand: 'Moncler Kids', avgSell: 110, minProfit: 35, cat: 'kids' },
+  { search: 'Adidas Samba trainers', brand: 'Adidas', avgSell: 55, minProfit: 18, cat: 'trainers' },
+  { search: 'Nike Air Force 1 trainers', brand: 'Nike', avgSell: 55, minProfit: 18, cat: 'trainers' },
+  { search: 'New Balance 550 trainers', brand: 'New Balance', avgSell: 65, minProfit: 20, cat: 'trainers' },
+  { search: 'Salomon trainers', brand: 'Salomon', avgSell: 80, minProfit: 25, cat: 'trainers' },
+  { search: 'Dr Martens boots', brand: 'Dr Martens', avgSell: 65, minProfit: 22, cat: 'boots' },
+  { search: 'Levi 501 jeans', brand: "Levi's", avgSell: 42, minProfit: 15, cat: 'denim' },
+  { search: 'Nike vintage hoodie', brand: 'Nike', avgSell: 42, minProfit: 14, cat: 'nike' },
+  { search: 'Ralph Lauren polo shirt', brand: 'Ralph Lauren', avgSell: 28, minProfit: 12, cat: 'polo' },
+  { search: 'Lacoste polo shirt', brand: 'Lacoste', avgSell: 30, minProfit: 12, cat: 'polo' },
+  { search: 'Lululemon leggings', brand: 'Lululemon', avgSell: 40, minProfit: 15, cat: 'activewear' },
+  { search: 'Veja trainers', brand: 'Veja', avgSell: 70, minProfit: 22, cat: 'trainers' },
+  { search: 'Birkenstock sandals', brand: 'Birkenstock', avgSell: 50, minProfit: 16, cat: 'trainers' },
+];
+
+async function scanVinted() {
+  const results = [];
+
+  for (const target of VINTED_TARGETS) {
+    try {
+      // Calculate max buy price to generate meaningful profit
+      // Buy price must be below (avgSell - minProfit - POSTAGE)
+      const maxBuy = Math.floor(target.avgSell - target.minProfit - POSTAGE);
+      if (maxBuy <= 3) continue;
+
+      const url = 'https://www.vinted.co.uk/catalog?' +
+        'search_text=' + encodeURIComponent(target.search) +
+        '&price_to=' + maxBuy +
+        '&order=newest_first' +
+        '&currency=GBP';
+
+      const r = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-GB,en;q=0.9',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Cache-Control': 'no-cache',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'none',
+          'Upgrade-Insecure-Requests': '1'
+        },
+        signal: AbortSignal.timeout(15000)
+      });
+
+      if (!r.ok) { console.log('Vinted HTTP ' + r.status + ' for: ' + target.search); continue; }
+      const html = await r.text();
+
+      // Extract items from Next.js server-rendered HTML
+      // Vinted embeds item data in script tags as __next_f push calls
+      const items = parseVintedHtml(html, target);
+      results.push(...items);
+
+      if (items.length > 0) {
+        console.log('[VINTED] "' + target.search + '" — ' + items.length + ' underpriced items found (max £' + maxBuy + ')');
+      }
+
+      await new Promise(r => setTimeout(r, 2000)); // Be respectful — 2s between requests
+    } catch (e) {
+      console.log('Vinted scan error for "' + target.search + '":', e.message);
+    }
+  }
+
+  console.log('Vinted scan complete — ' + results.length + ' total underpriced items found');
+  return results;
+}
+
+function parseVintedHtml(html, target) {
+  const items = [];
+  const maxBuy = Math.floor(target.avgSell - target.minProfit - POSTAGE);
+
+  try {
+    // Method 1: Extract from __next_f push data (Next.js RSC format)
+    const scriptMatches = html.matchAll(/self\.__next_f\.push\(\[1,"(.+?)"\]\)/gs);
+    let combined = '';
+    for (const match of scriptMatches) {
+      try { combined += JSON.parse('"' + match[1] + '"'); } catch (e) { combined += match[1]; }
+    }
+
+    // Look for item URLs and prices in the combined script data
+    // Vinted item URLs follow pattern: /items/ITEMID-item-title
+    const itemUrlPattern = /\/items\/(\d+)-([^"\\]+)/g;
+    const pricePattern = /"amount":"([\d.]+)"/g;
+
+    const urls = [...combined.matchAll(itemUrlPattern)];
+    const prices = [...combined.matchAll(pricePattern)];
+
+    // Match URLs with nearby prices
+    for (let i = 0; i < Math.min(urls.length, 20); i++) {
+      const itemId = urls[i][1];
+      const slug = urls[i][2];
+      // Find the closest price to this URL position
+      const urlPos = combined.indexOf('/items/' + itemId);
+      let closestPrice = null;
+      let closestDist = Infinity;
+
+      for (const priceMatch of prices) {
+        const pricePos = combined.indexOf('"amount":"' + priceMatch[1] + '"');
+        const dist = Math.abs(pricePos - urlPos);
+        if (dist < closestDist && dist < 2000) {
+          closestDist = dist;
+          closestPrice = parseFloat(priceMatch[1]);
+        }
+      }
+
+      if (closestPrice && closestPrice > 0 && closestPrice <= maxBuy) {
+        const title = slug.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        const itemUrl = 'https://www.vinted.co.uk/items/' + itemId + '-' + slug;
+
+        if (!items.find(i => i.itemId === itemId)) {
+          items.push({
+            itemId,
+            title: target.brand + ' — ' + title.substring(0, 60),
+            price: closestPrice,
+            url: itemUrl,
+            brand: target.brand,
+            cat: target.cat,
+            avgSell: target.avgSell,
+            minProfit: target.minProfit,
+            source: 'Vinted'
+          });
+        }
+      }
+    }
+
+    // Method 2: Fallback — extract from JSON-like structures in HTML
+    if (items.length === 0) {
+      const priceMatches = html.matchAll(/"price":\s*\{[^}]*"amount"\s*:\s*"([\d.]+)"[^}]*\}[^{]*?"url"\s*:\s*"(\/items\/(\d+)[^"]+)"/g);
+      for (const match of priceMatches) {
+        const price = parseFloat(match[1]);
+        const url = 'https://www.vinted.co.uk' + match[2];
+        const itemId = match[3];
+        if (price > 0 && price <= maxBuy && !items.find(i => i.itemId === itemId)) {
+          items.push({
+            itemId,
+            title: target.brand + ' listing',
+            price,
+            url,
+            brand: target.brand,
+            cat: target.cat,
+            avgSell: target.avgSell,
+            minProfit: target.minProfit,
+            source: 'Vinted'
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.log('Vinted parse error:', e.message);
+  }
+
+  return items.slice(0, 5); // Max 5 per search term
+}
+
 // ── EBAY AUCTION SCANNER ──
 // Zero-bid auctions ending within 4 hours — catches items going for pennies
 async function scanAuctions(token) {
@@ -971,6 +1140,63 @@ async function runScan() {
     }
   }
 
+  // ── VINTED SCAN — scan Vinted directly for underpriced items ──
+  console.log('Scanning Vinted for underpriced items...');
+  let vintedItems = [];
+  try {
+    vintedItems = await Promise.race([
+      scanVinted(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Vinted scan timeout')), 120000))
+    ]);
+  } catch (e) { console.log('Vinted scan skipped:', e.message); }
+
+  for (const item of vintedItems) {
+    if (alertedIds.has('vinted-' + item.itemId)) continue;
+
+    const netProfit = item.avgSell - item.price - POSTAGE;
+    const roi = Math.round((netProfit / item.price) * 100);
+
+    if (netProfit < item.minProfit || roi < MIN_ROI) continue;
+
+    // Score with Claude if profit is strong
+    let appealData = null;
+    if (roi >= 150 && ANTHROPIC_KEY) {
+      appealData = await scoreAppeal(item.title, item.brand, item.cat, 'listed on Vinted', item.price);
+    }
+
+    const dealId = 'vinted-' + item.itemId;
+    const deal = {
+      id: dealId,
+      title: item.title,
+      price: item.price,
+      vintedListPrice: item.avgSell,
+      vintedNet: Math.round(netProfit * 100) / 100,
+      roi,
+      brand: item.brand,
+      cat: item.cat,
+      url: item.url,
+      source: '🔍 Vinted Underpriced',
+      confidenceTier: 'mustbuy',
+      confidenceScore: 80,
+      confidenceReasons: ['✅ Listed on Vinted below market value', '✅ Buy on Vinted, relist higher'],
+      soldData: { isReal: false, sampleSize: 0, ebaySoldMedian: item.avgSell, vintedEstimate: item.avgSell },
+      vintedDataSource: 'research',
+      appealScore: appealData?.appeal || null,
+      conditionScore: appealData?.condition || null,
+      appealReason: appealData?.appealReason || null,
+      conditionReason: appealData?.conditionReason || null,
+      isVintedSource: true
+    };
+
+    if (appealData) {
+      deal.confidenceReasons.push('✅ Appeal ' + appealData.appeal + '/10 — ' + appealData.appealReason);
+    }
+
+    alertDeals.push(deal);
+    alertedIds.add(dealId);
+    console.log('[VINTED] ' + item.title.substring(0, 50) + ' — £' + item.price + ' → relist £' + item.avgSell + ' (+£' + Math.round(netProfit) + ')');
+  }
+
   // ── OXFAM SCAN ──
   console.log('Scanning Oxfam Online...');
   const oxfamTerms = ['Nike vintage hoodie', 'Adidas Samba', 'Barbour wax jacket', 'Patagonia fleece', 'North Face jacket', 'Dr Martens boots', 'Stone Island', 'Levi 501', 'Ralph Lauren polo', 'Lacoste polo', 'Arc teryx', 'Carhartt WIP'];
@@ -1026,9 +1252,9 @@ async function runScan() {
     await sendAlert(auctionDeals.slice(0, 5), true);
   }
 
-  // ── REGULAR EMAIL — best Must Buys from eBay + Oxfam + Auctions ──
+  // ── REGULAR EMAIL — best Must Buys from eBay + Vinted + Oxfam + Auctions ──
   const mustBuyCount = alertDeals.filter(d => d.confidenceTier === 'mustbuy').length;
-  console.log('Scan complete — ' + alertDeals.length + ' deals (' + mustBuyCount + ' Must Buy) across eBay + Oxfam + Auctions');
+  console.log('Scan complete — ' + alertDeals.length + ' deals (' + mustBuyCount + ' Must Buy) across eBay + Vinted + Oxfam + Auctions');
 
   const mustBuysOnly = alertDeals.filter(d => d.confidenceTier === 'mustbuy');
   if (mustBuysOnly.length > 0) {
