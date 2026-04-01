@@ -175,12 +175,32 @@ const HARD_REJECT = [
   'programme','program','scarf','poster','mug','sticker','patch',
   'keyring','book','magazine','dvd','photo','trading card','ticket',
   'figurine','dirty','heavily worn','major stain','ripped','torn',
-  'broken zip','bundle of badges','job lot badges'
+  'broken zip','bundle of badges','job lot badges','charm','laces',
+  'insoles','tongue','spare part','parts only','spares repair'
 ];
 
 const COND_WARN = [
   'stain','mark','faded','damage','repair','hole','smell','fault',
   'as seen','as is','worn','well worn','tatty','grubby','needs clean'
+];
+
+// Small/kids sizes to reject for footwear
+const REJECT_SHOE_SIZES = [
+  'size 1 ', 'size 2 ', 'size 3 ', 'uk 1 ', 'uk 2 ', 'uk 3 ',
+  'uk1 ', 'uk2 ', 'uk3 ', ' sz 1', ' sz 2', ' sz 3',
+  'eu 32','eu 33','eu 34','eu 35',
+  'size 1/', 'size 2/', 'uk 1/', 'uk 2/'
+];
+
+// Kids ages to reject from adult clothing searches  
+const REJECT_KIDS_SIZES = [
+  ' age 8',' age 9',' age 10',' age 11',' age 12',
+  ' 8-9 ',' 9-10 ',' 10-11 ',' 11-12 ',
+  ' 8yr',' 9yr',' 10yr',' 11yr',' 12yr',
+  '8 years','9 years','10 years','11 years','12 years',
+  '14/16','14-16',' age 14',' age 16',
+  'kids size','childrens size','childs size',
+  'junior size','boys size','girls size'
 ];
 
 let cachedToken = null;
@@ -202,10 +222,21 @@ async function getToken() {
   return cachedToken;
 }
 
-function shouldReject(item) {
+function shouldReject(item, queueItem) {
   const text = ((item.title || '') + ' ' + (item.condition || '')).toLowerCase();
   if (item.itemLocation?.country && item.itemLocation.country !== 'GB') return true;
-  return HARD_REJECT.some(w => text.includes(w));
+  if (HARD_REJECT.some(w => text.includes(w))) return true;
+
+  // Reject small/kids shoe sizes for footwear searches
+  const isFootwear = queueItem && ['trainers','boots'].includes(queueItem.cat);
+  if (isFootwear) {
+    if (REJECT_SHOE_SIZES.some(s => text.includes(s))) return true;
+  }
+
+  // Reject kids ages from all searches
+  if (REJECT_KIDS_SIZES.some(s => text.includes(s))) return true;
+
+  return false;
 }
 
 // Get real eBay UK market prices — 40 listings, outliers removed
@@ -317,7 +348,7 @@ function getAppealCacheKey(title, brand, cat) {
   return brand + '|' + cat + '|' + normalised;
 }
 
-async function scoreAppeal(title, brand, cat, condition, price) {
+async function scoreAppeal(title, brand, cat, condition, price, imageUrl) {
   if (!ANTHROPIC_KEY) return null;
 
   // Check cache first
@@ -327,30 +358,50 @@ async function scoreAppeal(title, brand, cat, condition, price) {
     return cached.data;
   }
 
+  const isFootwear = ['trainers', 'boots'].includes(cat);
+  const minCondition = isFootwear ? 8 : 7;
+
   try {
     const prompt = `You are an expert UK Vinted reseller. Be RUTHLESS — most items are not worth buying.
 
 Item: "${title}"
 Brand: ${brand}
 Category: ${cat}
-Condition: ${condition || 'not specified'}
+Condition stated: ${condition || 'not specified'}
 Buy price: £${price}
+${isFootwear ? 'FOOTWEAR RULE: Condition must be 8+ — sole wear, creasing and yellowing kill resale value.' : ''}
 
-Score TWO things 1-10. Be strict — average items score 5, only genuinely desirable items score 7+.
+Score TWO things 1-10. Be strict.
 
 APPEAL (1-10): Would this sell well on Vinted UK within 2 weeks?
-- Score 8-10: Core desirable items (white AF1s, black Sambas, popular colourways, trending items, common sizes M/L)
-- Score 6-7: Decent but not exceptional (neutral colours, less popular sizes, slightly niche)
-- Score 1-5: Hard to sell (unusual colourways, niche styles, small sizes like 3/4/5 in trainers, accessories, laces, women's niche items, skirts/dresses unless very premium brand)
-REJECT immediately if: laces, socks, accessories, parts, odd sizes, ugly colourways
+- Score 8-10: Core desirable items (black Sambas, white AF1s, popular colourways, common sizes M/L/UK7-9)
+- Score 6-7: Decent but not exceptional
+- Score 1-5: Hard to sell (unusual colourways, small sizes 1-5 in footwear, niche styles, kids items, accessories)
+INSTANTLY SCORE 1 if: laces, socks, charms, accessories, kids sizes, size 1/2/3 footwear
 
-CONDITION (1-10): Is the condition trustworthy?
-- Score 8-10: BNWT, unworn, new with tags, immaculate
-- Score 6-7: Excellent, very good with clear description
-- Score 1-5: Vague (just "good used"), any mention of wear/marks/stains
+CONDITION (1-10):
+${isFootwear ? `FOOTWEAR SCORING (strict):
+- Score 9-10: BNWT, unworn, new with tags, worn once/twice with clean soles stated
+- Score 7-8: Excellent with SPECIFIC detail (e.g. "minimal sole wear", "leather in great condition")  
+- Score 1-6: ANY vague description — "good condition", "pre-owned excellent", "great used condition" = MAX 5
+- Score 1-3: Any mention of wear, marks, creasing, yellowing` : `
+- Score 8-10: BNWT, unworn, immaculate, new with tags
+- Score 6-7: Excellent/very good with clear specific description
+- Score 1-5: Vague descriptions like "good used condition", "pre-owned excellent" with no specifics`}
+
+${imageUrl ? 'An image of the item is provided. Use it to assess actual condition — look for sole wear, creasing, staining, yellowing, marks.' : ''}
 
 Respond ONLY with this JSON:
 {"appeal": 7, "condition": 6, "appealReason": "one sentence max", "conditionReason": "one sentence max"}`;
+
+    // Build message content — include image if available
+    const messageContent = imageUrl ? [
+      {
+        type: 'image',
+        source: { type: 'url', url: imageUrl }
+      },
+      { type: 'text', text: prompt }
+    ] : [{ role: 'user', content: prompt }];
 
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -362,9 +413,11 @@ Respond ONLY with this JSON:
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 150,
-        messages: [{ role: 'user', content: prompt }]
+        messages: imageUrl
+          ? [{ role: 'user', content: messageContent }]
+          : [{ role: 'user', content: prompt }]
       }),
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(20000)
     });
 
     if (!res.ok) return null;
@@ -660,127 +713,53 @@ async function sendAlert(deals, isAuctionAlert = false) {
   }
 }
 
-// ── OXFAM ONLINE SCRAPER ──
-// Charity shop staff price by eye — genuine bargains on branded items
+// ── OXFAM ONLINE — JSON API ──
+// Uses Oxfam's Oracle Commerce Cloud API directly — reliable, no HTML scraping
 async function scanOxfam(searchTerms) {
   const results = [];
   for (const term of searchTerms) {
     try {
-      // Use Oxfam's search with JSON-friendly params
-      const url = 'https://onlineshop.oxfam.org.uk/search?q=' + encodeURIComponent(term) + '&category=clothes&instock=true';
+      // Oxfam's actual search API endpoint
+      const url = 'https://onlineshop.oxfam.org.uk/ccstoreui/v1/assembler/assemble?' +
+        'Ntt=' + encodeURIComponent(term) +
+        '&No=0&Nrpp=24&Nr=AND(product.active:1,NOT(sku.listPrice:0.000000))' +
+        '&fields=products.displayName,products.salePrice,products.listPrice,products.route';
+
       const r = await fetch(url, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-GB,en;q=0.5',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json',
+          'X-CCAsset-Language': 'en',
         },
         signal: AbortSignal.timeout(12000)
       });
-      if (!r.ok) { console.log('Oxfam HTTP ' + r.status + ' for: ' + term); continue; }
-      const html = await r.text();
 
-      // Oxfam product cards — extract title, price and URL
-      // Products appear as: /product-title/product/HD_XXXXXXXX
-      const productRegex = /href="(\/[^"]+\/product\/HD_\d+)"[^>]*>\s*<[^>]+>\s*([^<]{5,80})<\/[^>]+>[\s\S]{0,500}?£([\d.]+)/gi;
+      if (!r.ok) { console.log('Oxfam API HTTP ' + r.status + ' for: ' + term); continue; }
+      const data = await r.json();
 
-      let match;
-      const seen = new Set();
-      while ((match = productRegex.exec(html)) !== null) {
-        const path = match[1];
-        const title = match[2].trim();
-        const price = parseFloat(match[3]);
-        if (seen.has(path)) continue;
-        seen.add(path);
+      // Extract products from response
+      const products = data?.resultsList?.records || data?.products || [];
+      for (const p of products) {
+        const title = p.displayName || p['product.displayName'] || '';
+        const price = parseFloat(p.salePrice || p.listPrice || p['sku.salePrice'] || 0);
+        const route = p.route || p['product.route'] || '';
 
-        if (price > 0 && price <= MAX_BUY_PRICE && title.length > 5) {
+        if (title && price > 0 && price <= MAX_BUY_PRICE) {
           results.push({
             title,
             price,
-            url: 'https://onlineshop.oxfam.org.uk' + path,
+            url: 'https://onlineshop.oxfam.org.uk' + (route.startsWith('/') ? route : '/' + route),
             source: 'Oxfam Online',
             searchTerm: term
           });
         }
       }
-
-      // Fallback: simpler price+title extraction
-      if (results.filter(r => r.searchTerm === term).length === 0) {
-        const priceBlocks = html.match(/class="[^"]*price[^"]*"[^>]*>[\s£]*([\d.]+)/gi) || [];
-        const titleBlocks = html.match(/class="[^"]*product[^"]*title[^"]*"[^>]*>([^<]{5,80})</gi) || [];
-        const urlBlocks = html.match(/href="(\/[^"]+\/product\/HD_\d+)"/gi) || [];
-
-        const count = Math.min(priceBlocks.length, titleBlocks.length, urlBlocks.length);
-        for (let i = 0; i < count; i++) {
-          const priceMatch = priceBlocks[i].match(/([\d.]+)/);
-          const titleMatch = titleBlocks[i].match(/>([^<]{5,80})</);
-          const urlMatch = urlBlocks[i].match(/href="([^"]+)"/);
-          if (!priceMatch || !titleMatch || !urlMatch) continue;
-          const price = parseFloat(priceMatch[1]);
-          if (price > 0 && price <= MAX_BUY_PRICE) {
-            results.push({
-              title: titleMatch[1].trim(),
-              price,
-              url: 'https://onlineshop.oxfam.org.uk' + urlMatch[1],
-              source: 'Oxfam Online',
-              searchTerm: term
-            });
-          }
-        }
-      }
-
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 1000));
     } catch (e) {
       console.log('Oxfam error for "' + term + '":', e.message);
     }
   }
-  console.log('Oxfam raw results: ' + results.length);
-  return results;
-}
-
-// ── PRELOVED SCRAPER ──
-// UK classified ads — private sellers with no idea of values
-async function scanPreloved(searchTerms) {
-  const results = [];
-  for (const term of searchTerms) {
-    try {
-      const url = 'https://www.preloved.co.uk/classifieds/all/uk?keywords=' + encodeURIComponent(term);
-      const r = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-GB,en;q=0.5',
-        },
-        signal: AbortSignal.timeout(12000)
-      });
-      if (!r.ok) { console.log('Preloved HTTP ' + r.status + ' for: ' + term); continue; }
-      const html = await r.text();
-
-      // Extract ad listings — title, price, URL
-      const adRegex = /href="(\/classifieds\/\d+[^"]*)"[^>]*>([^<]{5,80})<\/a>[\s\S]{0,300}?£\s*([\d,]+(?:\.\d{2})?)/gi;
-      let match;
-      const seen = new Set();
-      while ((match = adRegex.exec(html)) !== null) {
-        const path = match[1];
-        const title = match[2].trim();
-        const price = parseFloat(match[3].replace(',', ''));
-        if (seen.has(path)) continue;
-        seen.add(path);
-        if (price > 0 && price <= MAX_BUY_PRICE && title.length > 5) {
-          results.push({
-            title,
-            price,
-            url: 'https://www.preloved.co.uk' + path,
-            source: 'Preloved',
-            searchTerm: term
-          });
-        }
-      }
-      await new Promise(r => setTimeout(r, 1500));
-    } catch (e) {
-      console.log('Preloved error for "' + term + '":', e.message);
-    }
-  }
-  console.log('Preloved raw results: ' + results.length);
+  console.log('Oxfam: ' + results.length + ' items found');
   return results;
 }
 
@@ -890,7 +869,7 @@ async function runScan() {
 
       const ebayData = await ebayRes.json();
       const listings = (ebayData.itemSummaries || [])
-        .filter(l => !shouldReject(l))
+        .filter(l => !shouldReject(l, qItem))
         .slice(0, 12);
 
       if (!listings.length) continue;
@@ -911,10 +890,11 @@ async function runScan() {
 
       if (!candidates.length) continue;
 
-      // ── CLAUDE APPEAL SCORING ──
-      // Only score Must Buy candidates with ROI 150%+ — saves API costs
+      // ── CLAUDE APPEAL SCORING WITH IMAGE ANALYSIS ──
+      const isFootwear = ['trainers', 'boots'].includes(qItem.cat);
+      const minCondScore = isFootwear ? 8 : 7;
+
       for (const deal of candidates) {
-        // Strong deals or low ROI Must Buys skip Claude and go straight through
         if (deal.confidenceTier === 'strong' || deal.roi < 150) {
           alertDeals.push(deal);
           alertedIds.add(deal.id);
@@ -923,7 +903,9 @@ async function runScan() {
         }
 
         try {
-          const appeal = await scoreAppeal(deal.title, deal.brand, deal.cat, deal.condition, deal.price);
+          // Get image URL from the listing for visual condition check
+          const imageUrl = deal.image || null;
+          const appeal = await scoreAppeal(deal.title, deal.brand, deal.cat, deal.condition, deal.price, imageUrl);
 
           if (!appeal) {
             // If Claude fails, let the deal through anyway
@@ -936,8 +918,8 @@ async function runScan() {
           const appealScore = appeal.appeal;
           const condScore = appeal.condition;
 
-          // Both must be 7+ to reach inbox
-          if (appealScore >= 7 && condScore >= 7) {
+          // Footwear needs 8+ condition, clothing needs 7+
+          if (appealScore >= 7 && condScore >= minCondScore) {
             deal.appealScore = appealScore;
             deal.conditionScore = condScore;
             deal.appealReason = appeal.appealReason;
@@ -947,9 +929,9 @@ async function runScan() {
             deal.confidenceScore = Math.min(99, deal.confidenceScore + 5);
             alertDeals.push(deal);
             alertedIds.add(deal.id);
-            console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 45) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ') Appeal:' + appealScore + ' Cond:' + condScore);
+            console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 45) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ') Appeal:' + appealScore + ' Cond:' + condScore + (isFootwear ? ' [footwear — min cond 8]' : ''));
           } else {
-            console.log('[FILTERED] ' + deal.title.substring(0, 45) + ' — Appeal:' + appealScore + ' Cond:' + condScore + ' — ' + (appealScore < 7 ? appeal.appealReason : appeal.conditionReason));
+            console.log('[FILTERED] ' + deal.title.substring(0, 45) + ' — Appeal:' + appealScore + ' Cond:' + condScore + ' (min:' + minCondScore + ') — ' + (appealScore < 7 ? appeal.appealReason : appeal.conditionReason));
           }
         } catch (e) {
           // On error let deal through
@@ -978,7 +960,6 @@ async function runScan() {
 
   for (const item of oxfamItems) {
     if (alertedIds.has('oxfam-' + item.url)) continue;
-    // Find matching queue item for sold price lookup
     const qMatch = QUEUE.find(q => item.title.toLowerCase().includes(q.brand.toLowerCase())) || QUEUE[0];
     const soldData = await getSoldPrices(qMatch.soldQ || item.searchTerm, token);
     const deal = scoreDeal(
@@ -991,35 +972,6 @@ async function runScan() {
       alertDeals.push(deal);
       alertedIds.add(deal.id);
       console.log('[OXFAM MUSTBUY] ' + item.title.substring(0, 50) + ' — £' + item.price + ' (+£' + deal.vintedNet + ')');
-    }
-  }
-
-  // ── PRELOVED SCAN ──
-  console.log('Scanning Preloved...');
-  const prelovedTerms = ['Nike vintage hoodie', 'Adidas Samba trainers', 'Barbour wax jacket', 'Patagonia jacket', 'Dr Martens boots', 'Stone Island jacket', 'Levi 501 jeans', 'North Face jacket'];
-  let prelovedItems = [];
-  try {
-    prelovedItems = await Promise.race([
-      scanPreloved(prelovedTerms),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Preloved timeout')), 30000))
-    ]);
-  } catch (e) { console.log('Preloved scan skipped:', e.message); }
-  console.log('Preloved: ' + prelovedItems.length + ' items found under £' + MAX_BUY_PRICE);
-
-  for (const item of prelovedItems) {
-    if (alertedIds.has('preloved-' + item.url)) continue;
-    const qMatch = QUEUE.find(q => item.title.toLowerCase().includes(q.brand.toLowerCase())) || QUEUE[0];
-    const soldData = await getSoldPrices(qMatch.soldQ || item.searchTerm, token);
-    const deal = scoreDeal(
-      { title: item.title, price: { value: item.price }, itemWebUrl: item.url, itemId: 'preloved-' + encodeURIComponent(item.url) },
-      null, qMatch, soldData
-    );
-    if (deal && deal.confidenceTier === 'mustbuy' && deal.roi >= 150) {
-      deal.source = 'Preloved';
-      deal.id = 'preloved-' + encodeURIComponent(item.url);
-      alertDeals.push(deal);
-      alertedIds.add(deal.id);
-      console.log('[PRELOVED MUSTBUY] ' + item.title.substring(0, 50) + ' — £' + item.price + ' (+£' + deal.vintedNet + ')');
     }
   }
 
@@ -1049,9 +1001,9 @@ async function runScan() {
     await sendAlert(auctionDeals.slice(0, 5), true);
   }
 
-  // ── REGULAR EMAIL — best Must Buys from all sources ──
+  // ── REGULAR EMAIL — best Must Buys from eBay + Oxfam + Auctions ──
   const mustBuyCount = alertDeals.filter(d => d.confidenceTier === 'mustbuy').length;
-  console.log('Scan complete — ' + alertDeals.length + ' deals (' + mustBuyCount + ' Must Buy) across eBay + Oxfam + Preloved');
+  console.log('Scan complete — ' + alertDeals.length + ' deals (' + mustBuyCount + ' Must Buy) across eBay + Oxfam + Auctions');
 
   const mustBuysOnly = alertDeals.filter(d => d.confidenceTier === 'mustbuy');
   if (mustBuysOnly.length > 0) {
