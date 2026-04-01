@@ -779,7 +779,7 @@ async function scanOxfam(searchTerms) {
         }
       }
 
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 500));
     } catch (e) {
       console.log('Oxfam error for "' + term + '":', e.message);
     }
@@ -860,7 +860,7 @@ async function scanVinted() {
         console.log('[VINTED] "' + target.search + '" — ' + items.length + ' underpriced items found (max £' + maxBuy + ')');
       }
 
-      await new Promise(r => setTimeout(r, 2000)); // Be respectful — 2s between requests
+      await new Promise(r => setTimeout(r, 1000)); // 1s between requests
     } catch (e) {
       console.log('Vinted scan error for "' + target.search + '":', e.message);
     }
@@ -1150,7 +1150,7 @@ async function runScan() {
   try {
     vintedItems = await Promise.race([
       scanVinted(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Vinted scan timeout')), 120000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Vinted scan timeout')), 300000))
     ]);
   } catch (e) { console.log('Vinted scan skipped:', e.message); }
 
@@ -1208,7 +1208,7 @@ async function runScan() {
   try {
     oxfamItems = await Promise.race([
       scanOxfam(oxfamTerms),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Oxfam timeout')), 30000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Oxfam timeout')), 60000))
     ]);
   } catch (e) { console.log('Oxfam scan skipped:', e.message); }
   console.log('Oxfam: ' + oxfamItems.length + ' items found under £' + MAX_BUY_PRICE);
