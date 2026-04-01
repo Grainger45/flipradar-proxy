@@ -793,28 +793,13 @@ async function scanOxfam(searchTerms) {
 // Vinted sellers are casual and frequently underprice premium brands
 const VINTED_TARGETS = [
   { search: 'Patagonia fleece jacket', brand: 'Patagonia', avgSell: 65, minProfit: 20, cat: 'outerwear' },
-  { search: 'Patagonia down jacket', brand: 'Patagonia', avgSell: 90, minProfit: 30, cat: 'outerwear' },
   { search: 'North Face fleece jacket', brand: 'North Face', avgSell: 55, minProfit: 18, cat: 'outerwear' },
-  { search: 'North Face puffer jacket', brand: 'North Face', avgSell: 70, minProfit: 22, cat: 'outerwear' },
   { search: 'Barbour wax jacket', brand: 'Barbour', avgSell: 80, minProfit: 25, cat: 'outerwear' },
-  { search: 'Arc teryx jacket', brand: "Arc'teryx", avgSell: 120, minProfit: 40, cat: 'gorpcore' },
-  { search: 'Carhartt WIP jacket', brand: 'Carhartt WIP', avgSell: 55, minProfit: 18, cat: 'outerwear' },
   { search: 'Stone Island jacket', brand: 'Stone Island', avgSell: 120, minProfit: 40, cat: 'outerwear' },
-  { search: 'Stone Island Junior jacket', brand: 'Stone Island Junior', avgSell: 85, minProfit: 28, cat: 'kids' },
-  { search: 'CP Company jacket', brand: 'CP Company', avgSell: 95, minProfit: 30, cat: 'outerwear' },
-  { search: 'Moncler jacket kids', brand: 'Moncler Kids', avgSell: 110, minProfit: 35, cat: 'kids' },
   { search: 'Adidas Samba trainers', brand: 'Adidas', avgSell: 55, minProfit: 18, cat: 'trainers' },
-  { search: 'Nike Air Force 1 trainers', brand: 'Nike', avgSell: 55, minProfit: 18, cat: 'trainers' },
-  { search: 'New Balance 550 trainers', brand: 'New Balance', avgSell: 65, minProfit: 20, cat: 'trainers' },
-  { search: 'Salomon trainers', brand: 'Salomon', avgSell: 80, minProfit: 25, cat: 'trainers' },
   { search: 'Dr Martens boots', brand: 'Dr Martens', avgSell: 65, minProfit: 22, cat: 'boots' },
-  { search: 'Levi 501 jeans', brand: "Levi's", avgSell: 42, minProfit: 15, cat: 'denim' },
   { search: 'Nike vintage hoodie', brand: 'Nike', avgSell: 42, minProfit: 14, cat: 'nike' },
-  { search: 'Ralph Lauren polo shirt', brand: 'Ralph Lauren', avgSell: 28, minProfit: 12, cat: 'polo' },
-  { search: 'Lacoste polo shirt', brand: 'Lacoste', avgSell: 30, minProfit: 12, cat: 'polo' },
-  { search: 'Lululemon leggings', brand: 'Lululemon', avgSell: 40, minProfit: 15, cat: 'activewear' },
-  { search: 'Veja trainers', brand: 'Veja', avgSell: 70, minProfit: 22, cat: 'trainers' },
-  { search: 'Birkenstock sandals', brand: 'Birkenstock', avgSell: 50, minProfit: 16, cat: 'trainers' },
+  { search: 'Arc teryx jacket', brand: "Arc'teryx", avgSell: 120, minProfit: 40, cat: 'gorpcore' },
 ];
 
 async function scanVinted() {
@@ -845,7 +830,7 @@ async function scanVinted() {
           'Sec-Fetch-Site': 'none',
           'Upgrade-Insecure-Requests': '1'
         },
-        signal: AbortSignal.timeout(15000)
+        signal: AbortSignal.timeout(30000)
       });
 
       if (!r.ok) { console.log('Vinted HTTP ' + r.status + ' for: ' + target.search); continue; }
@@ -856,11 +841,7 @@ async function scanVinted() {
       const items = parseVintedHtml(html, target);
       results.push(...items);
 
-      if (items.length > 0) {
-        console.log('[VINTED] "' + target.search + '" — ' + items.length + ' underpriced items found (max £' + maxBuy + ')');
-      }
-
-      await new Promise(r => setTimeout(r, 1000)); // 1s between requests
+      console.log('[VINTED] "' + target.search + '" — ' + items.length + ' underpriced items found (max £' + maxBuy + ')');
     } catch (e) {
       console.log('Vinted scan error for "' + target.search + '":', e.message);
     }
