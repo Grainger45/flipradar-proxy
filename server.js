@@ -806,18 +806,18 @@ async function scanOxfam(searchTerms) {
 // Uses Vinted's internal API directly — same approach as VintedSeekers, Souk etc
 // Cookie factory: get session cookie once, use for all API calls = instant responses
 const VINTED_TARGETS = [
-  { search: 'Patagonia fleece jacket', brand: 'Patagonia', avgSell: 65, minProfit: 20, cat: 'outerwear' },
-  { search: 'North Face fleece jacket', brand: 'North Face', avgSell: 55, minProfit: 18, cat: 'outerwear' },
-  { search: 'Barbour wax jacket', brand: 'Barbour', avgSell: 80, minProfit: 25, cat: 'outerwear' },
-  { search: 'Stone Island jacket', brand: 'Stone Island', avgSell: 120, minProfit: 40, cat: 'outerwear' },
-  { search: 'Adidas Samba trainers', brand: 'Adidas', avgSell: 55, minProfit: 18, cat: 'trainers' },
-  { search: 'Dr Martens boots', brand: 'Dr Martens', avgSell: 65, minProfit: 22, cat: 'boots' },
-  { search: 'Nike vintage hoodie', brand: 'Nike', avgSell: 42, minProfit: 14, cat: 'nike' },
-  { search: "Arc'teryx jacket", brand: "Arc'teryx", avgSell: 120, minProfit: 40, cat: 'gorpcore' },
-  { search: 'Patagonia down jacket', brand: 'Patagonia', avgSell: 90, minProfit: 30, cat: 'outerwear' },
-  { search: 'Carhartt WIP jacket', brand: 'Carhartt WIP', avgSell: 55, minProfit: 18, cat: 'outerwear' },
-  { search: 'Salomon trainers', brand: 'Salomon', avgSell: 80, minProfit: 25, cat: 'trainers' },
-  { search: 'Veja trainers', brand: 'Veja', avgSell: 70, minProfit: 22, cat: 'trainers' },
+  { search: 'Patagonia fleece jacket', brand: 'Patagonia', avgSell: 55, minProfit: 18, cat: 'outerwear' },
+  { search: 'North Face fleece jacket', brand: 'North Face', avgSell: 45, minProfit: 15, cat: 'outerwear' },
+  { search: 'Barbour wax jacket', brand: 'Barbour', avgSell: 70, minProfit: 22, cat: 'outerwear' },
+  { search: 'Stone Island jacket', brand: 'Stone Island', avgSell: 110, minProfit: 35, cat: 'outerwear' },
+  { search: 'Adidas Samba trainers', brand: 'Adidas', avgSell: 48, minProfit: 15, cat: 'trainers' },
+  { search: 'Dr Martens boots', brand: 'Dr Martens', avgSell: 60, minProfit: 20, cat: 'boots' },
+  { search: 'Nike vintage hoodie', brand: 'Nike', avgSell: 38, minProfit: 12, cat: 'nike' },
+  { search: "Arc'teryx jacket", brand: "Arc'teryx", avgSell: 110, minProfit: 35, cat: 'gorpcore' },
+  { search: 'Patagonia down jacket', brand: 'Patagonia', avgSell: 80, minProfit: 25, cat: 'outerwear' },
+  { search: 'Carhartt WIP jacket', brand: 'Carhartt WIP', avgSell: 50, minProfit: 16, cat: 'outerwear' },
+  { search: 'Salomon trainers', brand: 'Salomon', avgSell: 70, minProfit: 22, cat: 'trainers' },
+  { search: 'Veja trainers', brand: 'Veja', avgSell: 60, minProfit: 18, cat: 'trainers' },
 ];
 
 // Track last seen item IDs per search to only process new listings
@@ -923,6 +923,15 @@ async function scanVinted(targets) {
         const slug = match[2];
         const title = slug.replace(/-/g, ' ');
         if (HARD_REJECT.some(w => title.toLowerCase().includes(w))) continue;
+
+        // Reject kids/toddler items
+        const titleLow = title.toLowerCase();
+        if (['kids', 'toddler', 'junior', 'infant', 'baby', 'childrens', 'children\'s', 'boys', 'girls', 'youth'].some(w => titleLow.includes(w))) continue;
+
+        // Reject small shoe sizes for footwear searches
+        if (['trainers','boots'].includes(target.cat)) {
+          if (['uk-3-', 'uk-2-', 'uk-1-', 'size-3-', 'size-2-', 'size-1-', 'eu-34', 'eu-33', 'eu-32', 'uk-6-women', 'womens-uk-6', 'woman-uk-6'].some(s => titleLow.includes(s))) continue;
+        }
 
         items.push({
           itemId,
@@ -1141,35 +1150,6 @@ async function runScan() {
       await new Promise(r => setTimeout(r, 700));
     } catch (e) {
       console.error('Error scanning "' + qItem.q + '":', e.message);
-    }
-  }
-
-  // ── OXFAM SCAN ──
-  console.log('Scanning Oxfam Online...');
-  const oxfamTerms = ['Nike vintage hoodie', 'Adidas Samba', 'Barbour wax jacket', 'Patagonia fleece', 'North Face jacket', 'Dr Martens boots', 'Stone Island', 'Levi 501', 'Ralph Lauren polo', 'Lacoste polo', 'Arc teryx', 'Carhartt WIP'];
-  let oxfamItems = [];
-  try {
-    oxfamItems = await Promise.race([
-      scanOxfam(oxfamTerms),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Oxfam timeout')), 60000))
-    ]);
-  } catch (e) { console.log('Oxfam scan skipped:', e.message); }
-  console.log('Oxfam: ' + oxfamItems.length + ' items found under £' + MAX_BUY_PRICE);
-
-  for (const item of oxfamItems) {
-    if (alertedIds.has('oxfam-' + item.url)) continue;
-    const qMatch = QUEUE.find(q => item.title.toLowerCase().includes(q.brand.toLowerCase())) || QUEUE[0];
-    const soldData = await getSoldPrices(qMatch.soldQ || item.searchTerm, token);
-    const deal = scoreDeal(
-      { title: item.title, price: { value: item.price }, itemWebUrl: item.url, itemId: 'oxfam-' + encodeURIComponent(item.url) },
-      null, qMatch, soldData
-    );
-    if (deal && deal.confidenceTier === 'mustbuy' && deal.roi >= 150) {
-      deal.source = 'Oxfam Online';
-      deal.id = 'oxfam-' + encodeURIComponent(item.url);
-      alertDeals.push(deal);
-      alertedIds.add(deal.id);
-      console.log('[OXFAM MUSTBUY] ' + item.title.substring(0, 50) + ' — £' + item.price + ' (+£' + deal.vintedNet + ')');
     }
   }
 
