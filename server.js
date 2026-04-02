@@ -922,10 +922,14 @@ async function scanVinted(targets) {
 
         const slug = match[2];
         const title = slug.replace(/-/g, ' ');
-        if (HARD_REJECT.some(w => title.toLowerCase().includes(w))) continue;
-
-        // Reject kids/toddler items
         const titleLow = title.toLowerCase();
+
+        // Must contain the brand name — rejects completely unrelated items
+        const brandLow = target.brand.toLowerCase().replace("'", '');
+        const titleNorm = titleLow.replace("'", '');
+        if (!titleNorm.includes(brandLow) && !titleNorm.includes(brandLow.split(' ')[0])) continue;
+
+        if (HARD_REJECT.some(w => titleLow.includes(w))) continue;
         if (['kids', 'toddler', 'junior', 'infant', 'baby', 'childrens', 'children\'s', 'boys', 'girls', 'youth'].some(w => titleLow.includes(w))) continue;
 
         // Reject small shoe sizes for footwear searches
