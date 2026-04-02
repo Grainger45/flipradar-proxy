@@ -869,83 +869,83 @@ async function scanVinted(targets) {
       const maxBuy = Math.floor(target.avgSell - target.minProfit - POSTAGE);
       if (maxBuy <= 3) continue;
 
-      // api/v2 endpoint — requires Bearer token, returns clean JSON instantly
-      const timestamp = Math.floor(Date.now() / 1000);
-      const url = 'https://www.vinted.co.uk/api/v2/catalog/items?' +
+      // Vinted uses server-side rendering — scrape the catalog HTML page directly
+      const pageUrl = 'https://www.vinted.co.uk/catalog?' +
         'search_text=' + encodeURIComponent(target.search) +
         '&price_to=' + maxBuy +
         '&currency=GBP' +
-        '&order=newest_first' +
-        '&per_page=48' +
-        '&time=' + timestamp;
+        '&order=newest_first';
 
-      const vintedToken = process.env.VINTED_TOKEN;
-      const r = await fetch(url, {
+      const r = await fetch(pageUrl, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'application/json, text/plain, */*',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'Accept-Language': 'en-GB,en;q=0.9',
-          'Authorization': vintedToken ? 'Bearer ' + vintedToken : undefined,
           'Cookie': cookie,
-          'Referer': 'https://www.vinted.co.uk/catalog?search_text=' + encodeURIComponent(target.search),
-          'X-Requested-With': 'XMLHttpRequest',
-          'Sec-Fetch-Dest': 'empty',
-          'Sec-Fetch-Mode': 'cors',
-          'Sec-Fetch-Site': 'same-origin',
         },
-        signal: AbortSignal.timeout(10000)
+        signal: AbortSignal.timeout(15000)
       });
 
-      if (!r.ok) {
-        console.log('Vinted API HTTP ' + r.status + ' for: ' + target.search);
-        // If 401/403, cookie expired — clear it
-        if (r.status === 401 || r.status === 403) vintedCookie = null;
-        continue;
-      }
+      if (!r.ok) { console.log('Vinted HTTP ' + r.status + ' for: ' + target.search); continue; }
+      const html = await r.text();
 
-      const data = await r.json();
-      const items = data.items || data.catalog_items || [];
+      // Extract items from embedded JSON in script tags
+      // Vinted embeds item data as JSON in the page
+      const items = [];
       const lastSeen = vintedLastSeen.get(target.search) || new Set();
       const newLastSeen = new Set();
-      let newCount = 0;
 
-      for (const item of items) {
-        const itemId = String(item.id);
+      // Match item URLs and prices from the HTML
+      const itemMatches = [...html.matchAll(/\/items\/(\d+)-([^"?\\]+)/g)];
+      const priceMatches = [...html.matchAll(/"total_item_price"\s*:\s*"([^"]+)"|"price"\s*:\s*\{"amount"\s*:\s*"([^"]+)"/g)];
+
+      const seen = new Set();
+      let priceIdx = 0;
+
+      for (const match of itemMatches) {
+        const itemId = match[1];
+        if (seen.has(itemId)) continue;
+        seen.add(itemId);
         newLastSeen.add(itemId);
 
-        // Skip if we've seen this before
-        if (lastSeen.has(itemId)) continue;
-        newCount++;
+        // Find next available price
+        let price = null;
+        while (priceIdx < priceMatches.length) {
+          const p = parseFloat(priceMatches[priceIdx][1] || priceMatches[priceIdx][2] || '0');
+          priceIdx++;
+          if (p > 0 && p <= maxBuy) { price = p; break; }
+          if (p > maxBuy) break;
+        }
 
-        const price = parseFloat(item.price?.amount || item.price || 0);
-        if (price <= 0 || price > maxBuy) continue;
+        if (!price) continue;
+        if (lastSeen.has(itemId)) continue; // Skip already seen
 
-        // Skip rejected items
-        const title = item.title || item.description || '';
+        const slug = match[2];
+        const title = slug.replace(/-/g, ' ');
         if (HARD_REJECT.some(w => title.toLowerCase().includes(w))) continue;
 
-        const imageUrl = item.photo?.url || item.photos?.[0]?.url || null;
-
-        results.push({
+        items.push({
           itemId,
-          title: title || target.brand + ' — ' + target.search,
+          title: title.substring(0, 80),
           price,
-          url: item.url || 'https://www.vinted.co.uk/items/' + itemId,
+          url: 'https://www.vinted.co.uk/items/' + itemId + '-' + slug,
           brand: target.brand,
           cat: target.cat,
           avgSell: target.avgSell,
           minProfit: target.minProfit,
-          image: imageUrl,
-          condition: item.status || '',
+          image: null,
+          condition: '',
           source: 'Vinted'
         });
+
+        if (items.length >= 5) break;
       }
 
-      // Update last seen for next scan
       vintedLastSeen.set(target.search, newLastSeen);
+      results.push(...items);
 
-      if (results.length > 0) {
-        console.log('[VINTED] "' + target.search + '" — ' + results.length + ' underpriced items (max £' + maxBuy + ', ' + newCount + ' new listings)');
+      if (items.length > 0) {
+        console.log('[VINTED] "' + target.search + '" — ' + items.length + ' underpriced items found (max £' + maxBuy + ')');
       }
 
     } catch (e) {
