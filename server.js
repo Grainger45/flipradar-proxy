@@ -867,13 +867,14 @@ async function scanVinted(targets) {
       const maxBuy = Math.floor(target.avgSell - target.minProfit - POSTAGE);
       if (maxBuy <= 3) continue;
 
-      // Use Vinted's internal API directly — returns clean JSON instantly
+      // Use Vinted's web catalog API with proper headers
       const url = 'https://www.vinted.co.uk/api/v2/catalog/items?' +
         'search_text=' + encodeURIComponent(target.search) +
         '&price_to=' + maxBuy +
         '&currency=GBP' +
         '&order=newest_first' +
-        '&per_page=48';
+        '&per_page=48' +
+        '&time=' + Math.floor(Date.now() / 1000);
 
       const r = await fetch(url, {
         headers: {
@@ -881,8 +882,11 @@ async function scanVinted(targets) {
           'Accept': 'application/json, text/plain, */*',
           'Accept-Language': 'en-GB,en;q=0.9',
           'Cookie': cookie,
-          'Referer': 'https://www.vinted.co.uk/',
+          'Referer': 'https://www.vinted.co.uk/catalog?search_text=' + encodeURIComponent(target.search),
           'X-Requested-With': 'XMLHttpRequest',
+          'Sec-Fetch-Dest': 'empty',
+          'Sec-Fetch-Mode': 'cors',
+          'Sec-Fetch-Site': 'same-origin',
         },
         signal: AbortSignal.timeout(10000)
       });
