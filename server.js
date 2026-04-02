@@ -180,7 +180,9 @@ const HARD_REJECT = [
   'label only','replacement label','spare label','coat label',
   'wax label','care label','swing tag','hang tag','swing label',
   'box only','dust bag only','authenticity card','care card',
-  'button only','zip only','buckle only','strap only'
+  'button only','zip only','buckle only','strap only',
+  'repair section','repair material','repair patch','repair kit',
+  'replacement patch','spare material','fabric repair'
 ];
 
 const COND_WARN = [
@@ -867,22 +869,23 @@ async function scanVinted(targets) {
       const maxBuy = Math.floor(target.avgSell - target.minProfit - POSTAGE);
       if (maxBuy <= 3) continue;
 
-      // Use Vinted's web catalog API — doesn't require OAuth token, just session cookie
+      // api/v2 endpoint — requires Bearer token, returns clean JSON instantly
       const timestamp = Math.floor(Date.now() / 1000);
-      const url = 'https://www.vinted.co.uk/web/api/core/catalog/items?' +
+      const url = 'https://www.vinted.co.uk/api/v2/catalog/items?' +
         'search_text=' + encodeURIComponent(target.search) +
         '&price_to=' + maxBuy +
         '&currency=GBP' +
         '&order=newest_first' +
         '&per_page=48' +
-        '&time=' + timestamp +
-        '&catalog_from=0';
+        '&time=' + timestamp;
 
+      const vintedToken = process.env.VINTED_TOKEN;
       const r = await fetch(url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           'Accept': 'application/json, text/plain, */*',
           'Accept-Language': 'en-GB,en;q=0.9',
+          'Authorization': vintedToken ? 'Bearer ' + vintedToken : undefined,
           'Cookie': cookie,
           'Referer': 'https://www.vinted.co.uk/catalog?search_text=' + encodeURIComponent(target.search),
           'X-Requested-With': 'XMLHttpRequest',
