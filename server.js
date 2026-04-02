@@ -867,14 +867,16 @@ async function scanVinted(targets) {
       const maxBuy = Math.floor(target.avgSell - target.minProfit - POSTAGE);
       if (maxBuy <= 3) continue;
 
-      // Use Vinted's web catalog API with proper headers
-      const url = 'https://www.vinted.co.uk/api/v2/catalog/items?' +
+      // Use Vinted's web catalog API — doesn't require OAuth token, just session cookie
+      const timestamp = Math.floor(Date.now() / 1000);
+      const url = 'https://www.vinted.co.uk/web/api/core/catalog/items?' +
         'search_text=' + encodeURIComponent(target.search) +
         '&price_to=' + maxBuy +
         '&currency=GBP' +
         '&order=newest_first' +
         '&per_page=48' +
-        '&time=' + Math.floor(Date.now() / 1000);
+        '&time=' + timestamp +
+        '&catalog_from=0';
 
       const r = await fetch(url, {
         headers: {
