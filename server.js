@@ -917,11 +917,31 @@ async function scanVinted(targets) {
       const newLastSeen = new Set();
 
       // Match item URLs and prices from the HTML
-      const itemMatches = [...html.matchAll(/\/items\/(\d+)-([^"?\\]+)/g)];
-      const priceMatches = [...html.matchAll(/"total_item_price"\s*:\s*"([^"]+)"|"price"\s*:\s*\{"amount"\s*:\s*"([^"]+)"/g)];
+      // Vinted embeds data as escaped JSON: \"amount\":\"26.0\"
+      const itemMatches = [...html.matchAll(/\/items\/(\d+)-([^"?\\&\s]+)/g)];
+      const priceMatches = [...html.matchAll(/\\"amount\\":\\"([\d.]+)\\"/g)];
+
+      // Build price map — find closest price to each item in the HTML
+      const priceMap = new Map();
+      const seenIds = new Set();
+      for (const im of itemMatches) {
+        const itemId = im[1];
+        if (seenIds.has(itemId)) continue;
+        seenIds.add(itemId);
+        const itemPos = im.index;
+        let closest = null;
+        let closestDist = Infinity;
+        for (const pm of priceMatches) {
+          const dist = Math.abs(pm.index - itemPos);
+          if (dist < closestDist && dist < 2000) {
+            closestDist = dist;
+            closest = parseFloat(pm[1]);
+          }
+        }
+        if (closest && closest > 0 && closest <= maxBuy) priceMap.set(itemId, closest);
+      }
 
       const seen = new Set();
-      let priceIdx = 0;
 
       for (const match of itemMatches) {
         const itemId = match[1];
@@ -929,17 +949,9 @@ async function scanVinted(targets) {
         seen.add(itemId);
         newLastSeen.add(itemId);
 
-        // Find next available price
-        let price = null;
-        while (priceIdx < priceMatches.length) {
-          const p = parseFloat(priceMatches[priceIdx][1] || priceMatches[priceIdx][2] || '0');
-          priceIdx++;
-          if (p > 0 && p <= maxBuy) { price = p; break; }
-          if (p > maxBuy) break;
-        }
-
+        const price = priceMap.get(itemId);
         if (!price) continue;
-        if (lastSeen.has(itemId)) continue; // Skip already seen
+        if (lastSeen.has(itemId)) continue;
 
         const slug = match[2];
         const title = slug.replace(/-/g, ' ');
