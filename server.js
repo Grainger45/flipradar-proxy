@@ -917,9 +917,9 @@ async function scanVinted(targets) {
       const newLastSeen = new Set();
 
       // Match item URLs and prices from the HTML
-      // Vinted embeds data as escaped JSON: \"amount\":\"26.0\"
+      // Vinted embeds data as double-escaped JSON: \\\"amount\\\":\\\"26.0\\\"
       const itemMatches = [...html.matchAll(/\/items\/(\d+)-([^"?\\&\s]+)/g)];
-      const priceMatches = [...html.matchAll(/\\"amount\\":\\"([\d.]+)\\"/g)];
+      const priceMatches = [...html.matchAll(/amount[\\]*":[\\]*"([\d.]+)/g)];
 
       // Build price map — find closest price to each item in the HTML
       const priceMap = new Map();
