@@ -213,6 +213,18 @@ let cachedToken = null;
 let tokenExpiry = 0;
 const alertedIds = new Set();
 
+// Status tracking
+const statusData = {
+  startedAt: new Date().toISOString(),
+  lastEbayScan: null,
+  lastVintedScan: null,
+  lastEmailSent: null,
+  totalEmailsSent: 0,
+  totalDealsFound: 0,
+  totalVintedDealsFound: 0,
+  lastDeals: []
+};
+
 async function getToken() {
   if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
   const creds = Buffer.from(CLIENT_ID + ':' + CLIENT_SECRET).toString('base64');
@@ -718,6 +730,15 @@ async function sendAlert(deals, isAuctionAlert = false) {
     });
     if (r.ok) {
       console.log('Alert sent: ' + subject);
+      statusData.lastEmailSent = new Date().toISOString();
+      statusData.totalEmailsSent++;
+      statusData.lastDeals = deals.slice(0, 5).map(d => ({
+        title: d.title?.substring(0, 50),
+        price: d.price,
+        profit: d.vintedNet,
+        tier: d.confidenceTier,
+        source: d.isVintedSource ? 'Vinted' : 'eBay'
+      }));
     } else {
       const err = await r.text();
       console.error('SendGrid error:', err);
@@ -1050,6 +1071,7 @@ async function runScan() {
   }
 
   console.log('Scan started at ' + new Date().toLocaleString('en-GB'));
+  statusData.lastEbayScan = new Date().toISOString();
   let token;
   try { token = await getToken(); } catch (e) { console.error('Token error:', e.message); scanRunning = false; return; }
 
@@ -1216,6 +1238,7 @@ async function runVintedScan() {
   }
 
   console.log('Vinted scan — batch: ' + batch.map(t => t.search).join(', '));
+  statusData.lastVintedScan = new Date().toISOString();
 
   try {
     const token = await getToken();
@@ -1352,6 +1375,120 @@ app.get('/deals', async (req, res) => {
   }
 });
 
+app.get('/status', (req, res) => {
+  const now = Date.now();
+  const uptimeMs = now - new Date(statusData.startedAt).getTime();
+  const uptimeHrs = Math.floor(uptimeMs / 3600000);
+  const uptimeMins = Math.floor((uptimeMs % 3600000) / 60000);
+
+  const timeSince = (iso) => {
+    if (!iso) return 'Never';
+    const diff = Math.floor((now - new Date(iso).getTime()) / 60000);
+    if (diff < 1) return 'Just now';
+    if (diff < 60) return diff + 'm ago';
+    return Math.floor(diff / 60) + 'h ' + (diff % 60) + 'm ago';
+  };
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="refresh" content="60">
+  <title>FlipRadar Status</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f0f; color: #fff; min-height: 100vh; padding: 24px; }
+    h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+    .subtitle { color: #666; font-size: 13px; margin-bottom: 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .card { background: #1a1a1a; border-radius: 12px; padding: 16px; border: 1px solid #2a2a2a; }
+    .card-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .card-value { font-size: 22px; font-weight: 700; }
+    .card-sub { font-size: 12px; color: #666; margin-top: 4px; }
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+    .green { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+    .yellow { background: #eab308; }
+    .section-title { font-size: 13px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+    .deal { background: #1a1a1a; border-radius: 10px; padding: 14px; margin-bottom: 8px; border: 1px solid #2a2a2a; display: flex; justify-content: space-between; align-items: center; }
+    .deal-title { font-size: 14px; font-weight: 500; }
+    .deal-meta { font-size: 12px; color: #666; margin-top: 3px; }
+    .badge { font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 20px; white-space: nowrap; }
+    .mustbuy { background: #166534; color: #4ade80; }
+    .strong { background: #1e3a5f; color: #60a5fa; }
+    .vinted { background: #3b1f5e; color: #c084fc; }
+    .profit { font-size: 16px; font-weight: 700; color: #4ade80; }
+    .footer { text-align: center; color: #444; font-size: 12px; margin-top: 24px; }
+    .actions { display: flex; gap: 8px; margin-bottom: 24px; }
+    .btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #fff; padding: 8px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; text-decoration: none; }
+    .btn:hover { border-color: #444; }
+    .btn-primary { background: #166534; border-color: #166534; }
+  </style>
+</head>
+<body>
+  <h1>🎯 FlipRadar</h1>
+  <p class="subtitle">Auto-refreshes every 60 seconds</p>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">Status</div>
+      <div class="card-value"><span class="status-dot green"></span>Live</div>
+      <div class="card-sub">Up ${uptimeHrs}h ${uptimeMins}m</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Last eBay Scan</div>
+      <div class="card-value">${timeSince(statusData.lastEbayScan)}</div>
+      <div class="card-sub">Every 60 minutes</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Last Vinted Scan</div>
+      <div class="card-value">${timeSince(statusData.lastVintedScan)}</div>
+      <div class="card-sub">Every 5 minutes</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Last Email</div>
+      <div class="card-value">${timeSince(statusData.lastEmailSent)}</div>
+      <div class="card-sub">${statusData.totalEmailsSent} sent this session</div>
+    </div>
+    <div class="card">
+      <div class="card-label">eBay Queue</div>
+      <div class="card-value">${QUEUE.length}</div>
+      <div class="card-sub">Searches per scan</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Alerted IDs</div>
+      <div class="card-value">${alertedIds.size}</div>
+      <div class="card-sub">Tracked this session</div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <a href="/scan" class="btn btn-primary">▶ Run eBay Scan</a>
+    <a href="/scan-vinted" class="btn">🔍 Run Vinted Scan</a>
+    <a href="/health" class="btn">❤ Health</a>
+  </div>
+
+  <div class="section-title">Last Deals Alerted</div>
+  ${statusData.lastDeals.length === 0
+    ? '<div class="card" style="color:#666">No deals alerted yet this session</div>'
+    : statusData.lastDeals.map(d => `
+    <div class="deal">
+      <div>
+        <div class="deal-title">${d.title}</div>
+        <div class="deal-meta">£${d.price} buy · ${d.source}</div>
+      </div>
+      <div style="text-align:right">
+        <div class="profit">+£${d.profit}</div>
+        <span class="badge ${d.source === 'Vinted' ? 'vinted' : d.tier}">${d.tier === 'mustbuy' ? 'Must Buy' : 'Strong'}</span>
+      </div>
+    </div>`).join('')}
+
+  <div class="footer">FlipRadar · Max buy £${MAX_BUY_PRICE} · ${new Date().toLocaleString('en-GB')}</div>
+</body>
+</html>`;
+  res.send(html);
+});
+
 app.get('/scan-vinted', (req, res) => {
   res.json({ message: 'Vinted scan started — check logs and email in ~10 minutes' });
   runVintedScan();
@@ -1363,6 +1500,13 @@ app.listen(process.env.PORT || 3000, () => {
   console.log('Email service: ' + (SENDGRID_KEY ? 'SendGrid ready' : 'NOT SET'));
   console.log('Queue: ' + QUEUE.length + ' searches');
   console.log('Max buy price: £' + MAX_BUY_PRICE);
-  setTimeout(scheduledScan, 30000);           // eBay scan starts after 30s
-  setTimeout(scheduledVintedScan, 60000);     // Vinted scan starts after 60s
+  setTimeout(scheduledScan, 30000);
+  setTimeout(scheduledVintedScan, 60000);
+
+  // Keep-alive ping every 10 minutes to prevent Render free tier sleep
+  setInterval(() => {
+    fetch('https://flipradar-proxy.onrender.com/health')
+      .then(() => console.log('Keep-alive ping sent'))
+      .catch(() => {});
+  }, 10 * 60 * 1000);
 });
