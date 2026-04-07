@@ -910,58 +910,33 @@ async function scanVinted(targets) {
       if (!r.ok) { console.log('Vinted HTTP ' + r.status + ' for: ' + target.search); continue; }
       const html = await r.text();
 
-      // Debug — log what patterns we find
-      const debugItems = [...html.matchAll(/\/items\/(\d+)-([^"?\\&\s]+)/g)].length;
-      const debugPrices = [...html.matchAll(/amount[\\]*":[\\]*"([\d.]+)/g)].length;
-      const debugPrices2 = [...html.matchAll(/"amount":"([\d.]+)"/g)].length;
-      const htmlSnip = html.substring(html.indexOf('amount'), html.indexOf('amount') + 100);
-      console.log('[VINTED DEBUG] "' + target.search + '" — itemURLs:' + debugItems + ' prices1:' + debugPrices + ' prices2:' + debugPrices2 + ' snippet:' + htmlSnip.substring(0, 80));
-
       // Extract items from embedded JSON in script tags
       // Vinted embeds item data as JSON in the page
       const items = [];
       const lastSeen = vintedLastSeen.get(target.search) || new Set();
       const newLastSeen = new Set();
 
-      // Match item URLs and prices from the HTML
-      // Vinted embeds data as double-escaped JSON: \\\"amount\\\":\\\"26.0\\\"
-      const itemMatches = [...html.matchAll(/\/items\/(\d+)-([^"?\\&\s]+)/g)];
-      const priceMatches = [...html.matchAll(/amount[\\]*":[\\]*"([\d.]+)/g)];
+      // Vinted embeds item data in escaped JSON: {id},\"title\":\"...\",\"price\":{\"amount\":\"26.0\"
+      // Extract id+price pairs directly from this structure
+      const itemMatches = [...html.matchAll(/(\d{8,12}),\\"title\\":\\"([^\\]+)\\",\\"price\\":\{\\"amount\\":\\"([\d.]+)\\"/g)];
 
-      // Build price map — find closest price to each item in the HTML
-      const priceMap = new Map();
-      const seenIds = new Set();
-      for (const im of itemMatches) {
-        const itemId = im[1];
-        if (seenIds.has(itemId)) continue;
-        seenIds.add(itemId);
-        const itemPos = im.index;
-        let closest = null;
-        let closestDist = Infinity;
-        for (const pm of priceMatches) {
-          const dist = Math.abs(pm.index - itemPos);
-          if (dist < closestDist && dist < 2000) {
-            closestDist = dist;
-            closest = parseFloat(pm[1]);
-          }
-        }
-        if (closest && closest > 0 && closest <= maxBuy) priceMap.set(itemId, closest);
-      }
+      console.log('[VINTED] "' + target.search + '" — found ' + itemMatches.length + ' raw items in HTML');
 
       const seen = new Set();
 
       for (const match of itemMatches) {
         const itemId = match[1];
+        const rawTitle = match[2];
+        const price = parseFloat(match[3]);
+
         if (seen.has(itemId)) continue;
         seen.add(itemId);
         newLastSeen.add(itemId);
 
-        const price = priceMap.get(itemId);
-        if (!price) continue;
+        if (price <= 0 || price > maxBuy) continue;
         if (lastSeen.has(itemId)) continue;
 
-        const slug = match[2];
-        const title = slug.replace(/-/g, ' ');
+        const title = rawTitle.replace(/\\[rnt]/g, ' ').trim();
         const titleLow = title.toLowerCase();
 
         // Must contain the brand name — rejects completely unrelated items
@@ -981,7 +956,7 @@ async function scanVinted(targets) {
           itemId,
           title: title.substring(0, 80),
           price,
-          url: 'https://www.vinted.co.uk/items/' + itemId + '-' + slug,
+          url: 'https://www.vinted.co.uk/items/' + itemId,
           brand: target.brand,
           cat: target.cat,
           avgSell: target.avgSell,
