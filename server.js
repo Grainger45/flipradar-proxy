@@ -910,6 +910,13 @@ async function scanVinted(targets) {
       if (!r.ok) { console.log('Vinted HTTP ' + r.status + ' for: ' + target.search); continue; }
       const html = await r.text();
 
+      // Debug — log what patterns we find
+      const debugItems = [...html.matchAll(/\/items\/(\d+)-([^"?\\&\s]+)/g)].length;
+      const debugPrices = [...html.matchAll(/amount[\\]*":[\\]*"([\d.]+)/g)].length;
+      const debugPrices2 = [...html.matchAll(/"amount":"([\d.]+)"/g)].length;
+      const htmlSnip = html.substring(html.indexOf('amount'), html.indexOf('amount') + 100);
+      console.log('[VINTED DEBUG] "' + target.search + '" — itemURLs:' + debugItems + ' prices1:' + debugPrices + ' prices2:' + debugPrices2 + ' snippet:' + htmlSnip.substring(0, 80));
+
       // Extract items from embedded JSON in script tags
       // Vinted embeds item data as JSON in the page
       const items = [];
