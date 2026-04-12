@@ -916,11 +916,10 @@ async function getVintedCookie() {
 async function scanVinted(targets) {
   const searchTargets = targets || VINTED_TARGETS;
   const results = [];
+  const token = process.env.VINTED_TOKEN;
 
-  // Get session cookie first
-  const cookie = await getVintedCookie();
-  if (!cookie) {
-    console.log('Vinted: no cookie available, skipping scan');
+  if (!token) {
+    console.log('Vinted: no access token — add VINTED_TOKEN to Render env vars');
     return results;
   }
 
@@ -929,79 +928,59 @@ async function scanVinted(targets) {
       const maxBuy = Math.floor(target.avgSell - target.minProfit - POSTAGE);
       if (maxBuy <= 3) continue;
 
-      // Vinted uses server-side rendering — scrape the catalog HTML page directly
-      const pageUrl = 'https://www.vinted.co.uk/catalog?' +
+      // Use Vinted API v2 directly with Bearer token — clean JSON, no scraping
+      const url = 'https://www.vinted.co.uk/api/v2/catalog/items?' +
         'search_text=' + encodeURIComponent(target.search) +
         '&price_to=' + maxBuy +
         '&currency=GBP' +
-        '&order=newest_first';
+        '&order=newest_first' +
+        '&per_page=48';
 
-      const r = await fetch(pageUrl, {
+      const r = await fetch(url, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-GB,en;q=0.9',
-          'Cookie': '_vinted_fr_session=' + (process.env.VINTED_SESSION || '') + '; ' + (cookie || ''),
+          'Authorization': 'Bearer ' + token,
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         },
-        signal: AbortSignal.timeout(15000)
+        signal: AbortSignal.timeout(10000)
       });
 
-      if (!r.ok) { console.log('Vinted HTTP ' + r.status + ' for: ' + target.search); continue; }
-      const html = await r.text();
-      console.log('[VINTED] "' + target.search + '" html:' + html.length + 'chars');
+      if (!r.ok) {
+        console.log('Vinted API ' + r.status + ' for: ' + target.search);
+        if (r.status === 401) console.log('Token expired — refresh VINTED_TOKEN in Render');
+        continue;
+      }
 
-      const items = [];
+      const data = await r.json();
+      const apiItems = data.items || [];
+      console.log('[VINTED] "' + target.search + '" — API returned ' + apiItems.length + ' items (max £' + maxBuy + ')');
+
       const lastSeen = vintedLastSeen.get(target.search) || new Set();
       const newLastSeen = new Set();
+      const items = [];
 
-      // Try multiple patterns to handle Vinted HTML format variations
-      let itemMatches = [];
-      // Pattern 1: double-escaped JSON (most common server-side)
-      itemMatches = [...html.matchAll(/(\d{8,12}),\\"title\\":\\"([^\\]+)\\",\\"price\\":\{\\"amount\\":\\"([\d.]+)\\"/g)];
-      // Pattern 2: single-escaped JSON
-      if (itemMatches.length === 0) {
-        itemMatches = [...html.matchAll(/(\d{8,12}),"title":"([^"]+)","price":{"amount":"([\d.]+)"/g)];
-      }
-      // Pattern 3: URL slug + nearby price fallback
-      if (itemMatches.length === 0) {
-        const urlMs = [...html.matchAll(/\/items\/(\d{8,12})-([^"?\\&\s]+)/g)];
-        const priceMs = [...html.matchAll(/amount[^"]*"([\d.]+)"/g)];
-        for (const um of urlMs.slice(0, 30)) {
-          const near = priceMs.find(pm => Math.abs(pm.index - um.index) < 2000);
-          if (near) itemMatches.push({1: um[1], 2: um[2].replace(/-/g,' '), 3: near[1], index: um.index});
-        }
-      }
-      console.log('[VINTED] "' + target.search + '" found ' + itemMatches.length + ' raw items');
-
-      const seen = new Set();
-
-      for (const match of itemMatches) {
-        const itemId = match[1];
-        const rawTitle = match[2];
-        const price = parseFloat(match[3]);
-
-        if (seen.has(itemId)) continue;
-        seen.add(itemId);
+      for (const item of apiItems) {
+        const itemId = String(item.id);
         newLastSeen.add(itemId);
-
-        if (price <= 0 || price > maxBuy) continue;
         if (lastSeen.has(itemId)) continue;
 
-        const title = rawTitle.replace(/\\[rnt]/g, ' ').trim();
+        const price = parseFloat(item.price?.amount || item.price || 0);
+        if (price <= 0 || price > maxBuy) continue;
+
+        const title = item.title || '';
         const titleLow = title.toLowerCase();
 
-        // Must contain the brand name — rejects completely unrelated items
-        const brandLow = target.brand.toLowerCase().replace("'", '');
-        const titleNorm = titleLow.replace("'", '');
+        // Brand check
+        const brandLow = target.brand.toLowerCase().replace(/[']/g, '');
+        const titleNorm = titleLow.replace(/[']/g, '');
         if (!titleNorm.includes(brandLow) && !titleNorm.includes(brandLow.split(' ')[0])) continue;
 
+        // Reject kids/accessories
         if (HARD_REJECT.some(w => titleLow.includes(w))) continue;
-        if (['kids', 'toddler', 'junior', 'infant', 'baby', 'childrens', 'children\'s', 'boys', 'girls', 'youth'].some(w => titleLow.includes(w))) continue;
+        if (REJECT_KIDS_SIZES.some(s => titleLow.includes(s))) continue;
+        if (['kids', 'toddler', 'junior', 'infant', 'baby', 'boys', 'girls', 'youth'].some(w => titleLow.includes(w))) continue;
 
-        // Reject small shoe sizes for footwear searches
-        if (['trainers','boots'].includes(target.cat)) {
-          if (['uk-3-', 'uk-2-', 'uk-1-', 'size-3-', 'size-2-', 'size-1-', 'eu-34', 'eu-33', 'eu-32', 'uk-6-women', 'womens-uk-6', 'woman-uk-6'].some(s => titleLow.includes(s))) continue;
-        }
+        const imageUrl = item.photo?.url || item.photos?.[0]?.url || null;
 
         items.push({
           itemId,
@@ -1012,8 +991,8 @@ async function scanVinted(targets) {
           cat: target.cat,
           avgSell: target.avgSell,
           minProfit: target.minProfit,
-          image: null,
-          condition: '',
+          image: imageUrl,
+          condition: item.status || '',
           source: 'Vinted'
         });
 
@@ -1024,7 +1003,7 @@ async function scanVinted(targets) {
       results.push(...items);
 
       if (items.length > 0) {
-        console.log('[VINTED] "' + target.search + '" — ' + items.length + ' underpriced items found (max £' + maxBuy + ')');
+        console.log('[VINTED] "' + target.search + '" — ' + items.length + ' underpriced items found');
       }
 
     } catch (e) {
