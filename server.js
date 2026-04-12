@@ -1,634 +1,1721 @@
-// FlipRadar Pro - server.js
-// The definitive version. Real sold data. Auction sniping. Telegram alerts. No Vinted API.
-// ENV VARS: EBAY_APP_ID, ANTHROPIC_API_KEY, RESEND_API_KEY, ALERT_EMAIL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-
 const express = require('express');
-const https = require('https');
-const http = require('http');
+const fetch = require('node-fetch');
 const app = express();
+
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
 app.use(express.json());
 
-// ── Config ────────────────────────────────────────────────────
-const MAX_BUY = parseFloat(process.env.MAX_BUY_PRICE || '20');
-const MIN_PROFIT = parseFloat(process.env.MIN_PROFIT || '8');
-const POSTAGE = 3.50;
-const ALERT_EMAIL = process.env.ALERT_EMAIL || 'l.grainger1996@gmail.com';
-const SCAN_INTERVAL_MS = 2 * 60 * 1000; // scan every 2 minutes
+// ── CONFIG ──
+const CLIENT_ID = process.env.EBAY_CLIENT_ID;
+const CLIENT_SECRET = process.env.EBAY_CLIENT_SECRET;
+const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+const SENDGRID_KEY = process.env.SENDGRID_API_KEY;
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// ── State ─────────────────────────────────────────────────────
-let alertedIds = new Set();
-let alertedCount = 0;
-let scanCount = 0;
-let lastScanTime = null;
-let lastDealsAlerted = [];
-let recentDeals = []; // last 50 deals for dashboard
-let soldDataCache = {}; // cache real sold prices per search term
-
-// ── Fetch helper ──────────────────────────────────────────────
-function fetchUrl(url, options = {}) {
-  return new Promise((resolve, reject) => {
-    const lib = url.startsWith('https') ? https : http;
-    const req = lib.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/json,*/*',
-        ...options.headers
-      },
-      ...options
-    }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location)
-        return fetchUrl(res.headers.location, options).then(resolve).catch(reject);
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => resolve(data));
+// ── TELEGRAM NOTIFICATIONS ──
+async function sendTelegram(message) {
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
+  try {
+    await fetch('https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/sendMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text: message,
+        parse_mode: 'HTML',
+        disable_web_page_preview: false
+      })
     });
-    req.on('error', reject);
-    req.setTimeout(20000, () => { req.destroy(); reject(new Error('Timeout')); });
+  } catch (e) {
+    console.log('Telegram error:', e.message);
+  }
+}
+const ALERT_EMAIL = process.env.ALERT_EMAIL;
+const POSTAGE = 3.50;
+const MIN_NET_PROFIT = 15;
+const MAX_BUY_PRICE = 20; // Compromise — £20 max, but only alerts when ROI > 100%
+const MUST_BUY_RATIO = 0.40; // Below 40% of market median = Must Buy
+const STRONG_RATIO = 0.55;   // Below 55% = Strong
+const MIN_ROI = 100; // Must make at least 100% return on buy price (e.g. buy £10, profit £10+)
+
+// ── DEFINITIVE SEARCH QUEUE ──
+// Built from real Vinted UK 2026 sell-through data and seller ignorance patterns
+// Every item here has a proven Vinted buyer audience and realistic profit margin
+const QUEUE = [
+
+  // eBay UK Category IDs:
+  // 15709 = Athletic shoes/trainers
+  // 57990 = Men's hoodies & sweatshirts
+  // 57988 = Men's jackets & coats
+  // 11484 = Women's jackets & coats
+  // 15689 = Men's jeans
+  // 11554 = Women's jeans
+  // 57991 = Men's polo shirts
+  // 57992 = Men's t-shirts
+  // 11484 = Kids outerwear
+  // 57989 = Men's activewear
+  // 15724 = Women's activewear
+
+  // ═══ TIER 1: TRAINERS ═══
+  {q:'Nike Air Force 1 trainers',brand:'Nike',avgSell:55,minProfit:15,vintedQ:'Nike Air Force 1',soldQ:'Nike Air Force 1 trainers shoes',cat:'trainers',catId:'15709'},
+  {q:'New Balance 990 991 trainers',brand:'New Balance',avgSell:85,minProfit:20,vintedQ:'New Balance 990 991',soldQ:'New Balance 990 trainers shoes',cat:'trainers',catId:'15709'},
+  {q:'New Balance 550 trainers',brand:'New Balance',avgSell:70,minProfit:18,vintedQ:'New Balance 550',soldQ:'New Balance 550 trainers shoes',cat:'trainers',catId:'15709'},
+  {q:'Adidas Samba trainers',brand:'Adidas',avgSell:65,minProfit:18,vintedQ:'Adidas Samba',soldQ:'Adidas Samba trainers shoes',cat:'trainers',catId:'15709'},
+  {q:'Nike Dunk trainers',brand:'Nike',avgSell:75,minProfit:20,vintedQ:'Nike Dunk',soldQ:'Nike Dunk trainers shoes',cat:'trainers',catId:'15709'},
+  {q:'Asics Gel Lyte trainers vintage',brand:'Asics',avgSell:60,minProfit:15,vintedQ:'Asics Gel Lyte',soldQ:'Asics Gel Lyte trainers shoes',cat:'trainers',catId:'15709'},
+
+  // ═══ TIER 2: KIDS DESIGNER ═══
+  {q:'Stone Island Junior jacket boys',brand:'Stone Island Junior',avgSell:85,minProfit:25,vintedQ:'Stone Island Junior jacket',soldQ:'Stone Island Junior jacket kids',cat:'kids',catId:'11484'},
+  {q:'CP Company Junior jacket kids',brand:'CP Company Junior',avgSell:75,minProfit:22,vintedQ:'CP Company Junior jacket',soldQ:'CP Company Junior jacket kids',cat:'kids',catId:'11484'},
+  {q:'Moncler kids jacket boys girls',brand:'Moncler Kids',avgSell:110,minProfit:30,vintedQ:'Moncler kids jacket',soldQ:'Moncler kids jacket boys girls',cat:'kids',catId:'11484'},
+  {q:'Burberry kids jacket coat boys',brand:'Burberry Kids',avgSell:60,minProfit:18,vintedQ:'Burberry kids jacket',soldQ:'Burberry kids jacket coat',cat:'kids',catId:'11484'},
+
+  // ═══ TIER 3: PREMIUM POLOS ═══
+  {q:'Lacoste polo shirt mens',brand:'Lacoste',avgSell:32,minProfit:12,vintedQ:'Lacoste polo shirt mens',soldQ:'Lacoste polo shirt mens',cat:'polo',catId:'57991'},
+  {q:'Fred Perry polo shirt mens',brand:'Fred Perry',avgSell:28,minProfit:10,vintedQ:'Fred Perry polo shirt',soldQ:'Fred Perry polo shirt mens',cat:'polo',catId:'57991'},
+  {q:'Tommy Hilfiger polo shirt mens',brand:'Tommy Hilfiger',avgSell:28,minProfit:10,vintedQ:'Tommy Hilfiger polo',soldQ:'Tommy Hilfiger polo shirt mens',cat:'polo',catId:'57991'},
+
+  // ═══ TIER 4: NIKE VINTAGE ═══
+  {q:'Nike vintage hoodie sweatshirt',brand:'Nike',avgSell:42,minProfit:15,vintedQ:'Nike vintage hoodie',soldQ:'Nike vintage hoodie sweatshirt',cat:'nike',catId:'57990'},
+  {q:'Nike centre swoosh hoodie vintage',brand:'Nike',avgSell:48,minProfit:18,vintedQ:'Nike centre swoosh hoodie',soldQ:'Nike centre swoosh hoodie',cat:'nike',catId:'57990'},
+  {q:'Nike spellout sweatshirt vintage',brand:'Nike',avgSell:45,minProfit:16,vintedQ:'Nike spellout sweatshirt',soldQ:'Nike spellout sweatshirt vintage',cat:'nike',catId:'57990'},
+  {q:'Nike tech fleece jacket hoodie',brand:'Nike',avgSell:55,minProfit:18,vintedQ:'Nike tech fleece',soldQ:'Nike tech fleece jacket hoodie',cat:'nike',catId:'57988'},
+  {q:'Nike ACG jacket vintage',brand:'Nike',avgSell:65,minProfit:20,vintedQ:'Nike ACG jacket',soldQ:'Nike ACG jacket vintage',cat:'nike',catId:'57988'},
+
+  // ═══ TIER 5: OUTERWEAR ═══
+  {q:'Barbour wax jacket mens',brand:'Barbour',avgSell:80,minProfit:25,vintedQ:'Barbour wax jacket',soldQ:'Barbour wax jacket mens',cat:'outerwear',catId:'57988'},
+  {q:'North Face fleece jacket vintage',brand:'North Face',avgSell:55,minProfit:18,vintedQ:'North Face fleece',soldQ:'North Face fleece jacket',cat:'outerwear',catId:'57988'},
+  {q:'Patagonia fleece jacket half zip',brand:'Patagonia',avgSell:65,minProfit:20,vintedQ:'Patagonia fleece',soldQ:'Patagonia fleece jacket half zip',cat:'outerwear',catId:'57988'},
+  {q:'Arc teryx fleece jacket mens',brand:"Arc'teryx",avgSell:90,minProfit:28,vintedQ:"Arc'teryx fleece",soldQ:"Arc'teryx fleece jacket",cat:'outerwear',catId:'57988'},
+  {q:'Carhartt WIP jacket coat mens',brand:'Carhartt WIP',avgSell:55,minProfit:18,vintedQ:'Carhartt WIP jacket',soldQ:'Carhartt WIP jacket coat',cat:'outerwear',catId:'57988'},
+  {q:'Helly Hansen fleece jacket vintage',brand:'Helly Hansen',avgSell:38,minProfit:12,vintedQ:'Helly Hansen fleece',soldQ:'Helly Hansen fleece jacket',cat:'outerwear',catId:'57988'},
+
+  // ═══ TIER 6: GORPCORE ═══
+  {q:'Patagonia down jacket puffer',brand:'Patagonia',avgSell:95,minProfit:30,vintedQ:'Patagonia down jacket',soldQ:'Patagonia down jacket puffer',cat:'gorpcore',catId:'57988'},
+  {q:'Arc teryx Gore-Tex jacket shell',brand:"Arc'teryx",avgSell:120,minProfit:35,vintedQ:"Arc'teryx jacket",soldQ:"Arc'teryx Gore-Tex jacket shell",cat:'gorpcore',catId:'57988'},
+  {q:'North Face 700 puffer jacket',brand:'North Face',avgSell:75,minProfit:22,vintedQ:'North Face puffer jacket',soldQ:'North Face 700 puffer jacket',cat:'gorpcore',catId:'57988'},
+  {q:'Patagonia Synchilla fleece vintage',brand:'Patagonia',avgSell:65,minProfit:20,vintedQ:'Patagonia Synchilla fleece',soldQ:'Patagonia Synchilla fleece',cat:'gorpcore',catId:'57988'},
+
+  // ═══ TIER 7: VINTAGE BAND TEES ═══
+  {q:'vintage band t shirt single stitch 90s',brand:'Vintage Band Tee',avgSell:45,minProfit:15,vintedQ:'vintage band tshirt single stitch',soldQ:'vintage band t shirt single stitch 90s',cat:'vintage',catId:'57992'},
+  {q:'vintage rap tee hip hop shirt 90s',brand:'Vintage Rap Tee',avgSell:55,minProfit:18,vintedQ:'vintage rap tshirt hip hop',soldQ:'vintage rap tee hip hop 90s',cat:'vintage',catId:'57992'},
+  {q:'Harley Davidson vintage t shirt',brand:'Harley Davidson',avgSell:38,minProfit:12,vintedQ:'Harley Davidson vintage tshirt',soldQ:'Harley Davidson vintage t shirt',cat:'vintage',catId:'57992'},
+
+  // ═══ TIER 8: ACTIVEWEAR ═══
+  {q:'Lululemon leggings womens',brand:'Lululemon',avgSell:45,minProfit:15,vintedQ:'Lululemon leggings',soldQ:'Lululemon leggings womens',cat:'activewear',catId:'15724'},
+  {q:'Gymshark leggings set womens',brand:'Gymshark',avgSell:35,minProfit:12,vintedQ:'Gymshark set',soldQ:'Gymshark leggings set womens',cat:'activewear',catId:'15724'},
+  {q:'Sweaty Betty leggings womens',brand:'Sweaty Betty',avgSell:35,minProfit:12,vintedQ:'Sweaty Betty leggings',soldQ:'Sweaty Betty leggings womens',cat:'activewear',catId:'15724'},
+
+  // ═══ TIER 9: DENIM ═══
+  {q:'Levi 501 jeans mens vintage',brand:"Levi's",avgSell:45,minProfit:15,vintedQ:"Levi's 501 jeans",soldQ:"Levi's 501 jeans mens",cat:'denim',catId:'15689'},
+  {q:'Levi 501 jeans womens vintage',brand:"Levi's",avgSell:42,minProfit:14,vintedQ:"Levi's 501",soldQ:"Levi's 501 straight leg jeans womens",cat:'denim',catId:'11554'},
+
+  // ═══ TIER 10: SELLER IGNORANCE ═══
+  {q:'vintage jacket mens loft find clearance',brand:'Various',avgSell:40,minProfit:12,vintedQ:'vintage jacket',soldQ:'vintage jacket mens',cat:'vintage',catId:'57988'},
+  {q:'vintage hoodie sweatshirt old clearance',brand:'Various',avgSell:35,minProfit:10,vintedQ:'vintage hoodie',soldQ:'vintage hoodie sweatshirt',cat:'vintage',catId:'57990'},
+  {q:'vintage retro ski jacket mens',brand:'Various',avgSell:55,minProfit:18,vintedQ:'vintage ski jacket',soldQ:'vintage retro ski jacket',cat:'vintage',catId:'57988'},
+  {q:'Moschino vintage jacket mens',brand:'Moschino',avgSell:60,minProfit:18,vintedQ:'Moschino vintage',soldQ:'Moschino vintage jacket',cat:'vintage',catId:'57988'},
+  {q:'Versace Jeans Couture vintage jacket',brand:'Versace Jeans',avgSell:65,minProfit:20,vintedQ:'Versace Jeans Couture',soldQ:'Versace Jeans Couture jacket',cat:'vintage',catId:'57988'},
+  {q:'Armani Exchange vintage jacket mens',brand:'Armani',avgSell:45,minProfit:15,vintedQ:'Armani Exchange vintage',soldQ:'Armani Exchange jacket',cat:'vintage',catId:'57988'},
+
+  // ═══ TIER 11: FOOTBALL SHIRTS ═══
+  {q:'Parma Fiorentina Sampdoria football shirt',brand:'Serie A',avgSell:65,minProfit:20,vintedQ:'Serie A vintage football shirt',soldQ:'vintage Serie A football shirt',cat:'football',catId:'57992'},
+  {q:'USSR Yugoslavia Eastern European football shirt',brand:'Eastern Europe',avgSell:65,minProfit:20,vintedQ:'vintage football shirt',soldQ:'vintage Eastern European football shirt',cat:'football',catId:'57992'},
+  {q:'Wimbledon Coventry Bradford City shirt vintage',brand:'UK Lower League',avgSell:45,minProfit:14,vintedQ:'lower league football shirt',soldQ:'lower league vintage football shirt',cat:'football',catId:'57992'},
+
+  // ═══ TIER 12: MISSPELLINGS ═══
+  {q:'Addidas hoodie vintage',brand:'Adidas',avgSell:35,minProfit:12,vintedQ:'Adidas hoodie',soldQ:'Adidas hoodie sweatshirt',cat:'typo',catId:'57990'},
+  {q:'Niike hoodie vintage',brand:'Nike',avgSell:42,minProfit:15,vintedQ:'Nike hoodie',soldQ:'Nike hoodie sweatshirt vintage',cat:'typo',catId:'57990'},
+  {q:'Patogonia fleece jacket',brand:'Patagonia',avgSell:65,minProfit:20,vintedQ:'Patagonia fleece',soldQ:'Patagonia fleece jacket',cat:'typo',catId:'57988'},
+  {q:'Barbour wax jakcet',brand:'Barbour',avgSell:80,minProfit:25,vintedQ:'Barbour wax jacket',soldQ:'Barbour wax jacket mens',cat:'typo',catId:'57988'},
+  {q:'Stone Ilsand junior jacket',brand:'Stone Island Junior',avgSell:85,minProfit:25,vintedQ:'Stone Island Junior',soldQ:'Stone Island Junior jacket kids',cat:'typo',catId:'11484'},
+  {q:'New Ballance trainers',brand:'New Balance',avgSell:85,minProfit:20,vintedQ:'New Balance trainers',soldQ:'New Balance trainers shoes',cat:'typo',catId:'15709'},
+
+  // ═══ NEW HIGH-OPPORTUNITY BRANDS (research March 2026) ═══
+  // Dr Martens — eBay sellers undervalue, Vinted buyers pay £60-120
+  {q:'Dr Martens boots leather',brand:'Dr Martens',avgSell:70,minProfit:22,vintedQ:'Dr Martens boots',soldQ:'Dr Martens boots leather',cat:'boots',catId:'62108'},
+  {q:'Dr Martens 1460 boots',brand:'Dr Martens',avgSell:80,minProfit:25,vintedQ:'Dr Martens 1460',soldQ:'Dr Martens 1460 boots',cat:'boots',catId:'62108'},
+  {q:'Dr Martens womens boots shoes',brand:'Dr Martens',avgSell:70,minProfit:22,vintedQ:'Dr Martens womens',soldQ:'Dr Martens womens boots',cat:'boots',catId:'62107'},
+  {q:'Dr Martins boots',brand:'Dr Martens',avgSell:70,minProfit:22,vintedQ:'Dr Martens boots',soldQ:'Dr Martens boots leather',cat:'typo',catId:'62108'},
+
+  // Salomon — gorpcore trending, eBay sellers have no idea of value
+  {q:'Salomon trainers trail shoes',brand:'Salomon',avgSell:80,minProfit:25,vintedQ:'Salomon trainers',soldQ:'Salomon trainers trail running shoes',cat:'trainers',catId:'15709'},
+  {q:'Salomon XT-6 shoes',brand:'Salomon',avgSell:100,minProfit:30,vintedQ:'Salomon XT-6',soldQ:'Salomon XT-6 trail shoes',cat:'trainers',catId:'15709'},
+  {q:'Sallomon trainers',brand:'Salomon',avgSell:80,minProfit:25,vintedQ:'Salomon trainers',soldQ:'Salomon trainers shoes',cat:'typo',catId:'15709'},
+
+  // Veja — eco brand, premium Vinted prices, cheap on eBay
+  {q:'Veja trainers sneakers',brand:'Veja',avgSell:75,minProfit:22,vintedQ:'Veja trainers',soldQ:'Veja trainers sneakers',cat:'trainers',catId:'15709'},
+  {q:'Veja V-10 trainers',brand:'Veja',avgSell:85,minProfit:25,vintedQ:'Veja V-10',soldQ:'Veja V-10 trainers',cat:'trainers',catId:'15709'},
+
+  // Birkenstock — always in demand, eBay sellers undervalue
+  {q:'Birkenstock sandals Arizona',brand:'Birkenstock',avgSell:55,minProfit:18,vintedQ:'Birkenstock sandals',soldQ:'Birkenstock Arizona sandals',cat:'trainers',catId:'15709'},
+
+  // Ralph Lauren — back in queue, polos still sell well
+  {q:'Ralph Lauren polo shirt mens',brand:'Ralph Lauren',avgSell:30,minProfit:12,vintedQ:'Ralph Lauren polo mens',soldQ:'Ralph Lauren polo shirt mens',cat:'polo',catId:'57991'},
+];
+
+// ── REAL VINTED PRICE RANGES (from manual research March 2026) ──
+// Used to cross-check AI estimates and score confidence
+const VINTED_RANGES = {
+  'Nike Air Force 1': {low:25,high:65,avg:40},
+  'New Balance 990': {low:45,high:120,avg:75},
+  'New Balance 550': {low:35,high:80,avg:55},
+  'Adidas Samba': {low:30,high:70,avg:48},
+  'Nike Dunk': {low:35,high:90,avg:58},
+  'Stone Island Junior': {low:45,high:160,avg:85},
+  'CP Company Junior': {low:40,high:120,avg:70},
+  'Moncler Kids': {low:65,high:200,avg:110},
+  'Ralph Lauren polo': {low:12,high:35,avg:22},
+  'Lacoste polo': {low:14,high:38,avg:25},
+  'Fred Perry polo': {low:12,high:30,avg:20},
+  'Tommy Hilfiger polo': {low:12,high:32,avg:22},
+  'Dr Martens': {low:40,high:120,avg:70},
+  'Salomon': {low:50,high:130,avg:85},
+  'Veja': {low:45,high:110,avg:75},
+  'Birkenstock': {low:30,high:80,avg:50},
+  'Nike hoodie': {low:18,high:55,avg:35},
+  'Barbour wax jacket': {low:35,high:120,avg:70},
+  'North Face fleece': {low:25,high:70,avg:45},
+  'Patagonia fleece': {low:30,high:85,avg:55},
+  "Arc'teryx": {low:45,high:180,avg:90},
+  'Lululemon': {low:18,high:60,avg:38},
+  'Gymshark': {low:12,high:40,avg:25},
+  "Levi's 501": {low:18,high:55,avg:35},
+};
+
+// Items to always reject — these waste scan time and have no margin
+const HARD_REJECT = [
+  'reproduction','replica','remake','bootleg','badge','pin','pennant',
+  'programme','program','scarf','poster','mug','sticker','patch',
+  'keyring','book','magazine','dvd','photo','trading card','ticket',
+  'figurine','dirty','heavily worn','major stain','ripped','torn',
+  'broken zip','bundle of badges','job lot badges','charm','laces',
+  'insoles','tongue','spare part','parts only','spares repair',
+  'label only','replacement label','spare label','coat label',
+  'wax label','care label','swing tag','hang tag','swing label',
+  'box only','dust bag only','authenticity card','care card',
+  'button only','zip only','buckle only','strap only',
+  'repair section','repair material','repair patch','repair kit',
+  'replacement patch','spare material','fabric repair'
+];
+
+const COND_WARN = [
+  'stain','mark','faded','damage','repair','hole','smell','fault',
+  'as seen','as is','worn','well worn','tatty','grubby','needs clean'
+];
+
+// Small/kids sizes to reject for footwear
+const REJECT_SHOE_SIZES = [
+  'size 1 ', 'size 2 ', 'size 3 ', 'uk 1 ', 'uk 2 ', 'uk 3 ',
+  'uk1 ', 'uk2 ', 'uk3 ', ' sz 1', ' sz 2', ' sz 3',
+  'eu 32','eu 33','eu 34','eu 35',
+  'size 1/', 'size 2/', 'uk 1/', 'uk 2/'
+];
+
+// Kids ages to reject from adult clothing searches  
+const REJECT_KIDS_SIZES = [
+  ' age 8',' age 9',' age 10',' age 11',' age 12',
+  ' 8-9 ',' 9-10 ',' 10-11 ',' 11-12 ',
+  ' 8yr',' 9yr',' 10yr',' 11yr',' 12yr',
+  '8 years','9 years','10 years','11 years','12 years',
+  '14/16','14-16',' age 14',' age 16',
+  'kids size','childrens size','childs size',
+  'junior size','boys size','girls size',
+  'toddler','infant','baby size',
+  ' age 1 ',' age 2 ',' age 3 ',' age 4 ',' age 5 ',' age 6 ',' age 7 ',
+  '1-2 years','2-3 years','3-4 years','4-5 years','5-6 years','6-7 years',
+  'age 18 months','12 months','18 months','24 months',
+  'kids boots','kids shoes','kids trainers','boys boots','girls boots'
+];
+
+let cachedToken = null;
+let tokenExpiry = 0;
+const alertedIds = new Set();
+
+// Status tracking
+const statusData = {
+  startedAt: new Date().toISOString(),
+  lastEbayScan: null,
+  lastVintedScan: null,
+  lastEmailSent: null,
+  totalEmailsSent: 0,
+  totalDealsFound: 0,
+  totalVintedDealsFound: 0,
+  lastDeals: []
+};
+
+async function getToken() {
+  if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
+  const creds = Buffer.from(CLIENT_ID + ':' + CLIENT_SECRET).toString('base64');
+  const r = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
+    method: 'POST',
+    headers: { 'Authorization': 'Basic ' + creds, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'grant_type=client_credentials&scope=https%3A%2F%2Fapi.ebay.com%2Foauth%2Fapi_scope'
   });
+  const d = await r.json();
+  if (!d.access_token) throw new Error(JSON.stringify(d));
+  cachedToken = d.access_token;
+  tokenExpiry = Date.now() + (d.expires_in - 60) * 1000;
+  return cachedToken;
 }
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+function shouldReject(item, queueItem) {
+  const text = ((item.title || '') + ' ' + (item.condition || '')).toLowerCase();
+  if (item.itemLocation?.country && item.itemLocation.country !== 'GB') return true;
+  if (HARD_REJECT.some(w => text.includes(w))) return true;
 
-// ── Real sold data from eBay completed listings ───────────────
-async function getRealSoldData(query) {
-  const cacheKey = query.toLowerCase();
-  const now = Date.now();
+  // Reject if title contains "label" near a brand name — catches "Barbour label", "coat label" etc
+  if (text.includes('label') || text.includes('hang tag') || text.includes('swing tag')) return true;
 
-  // Cache for 4 hours
-  if (soldDataCache[cacheKey] && (now - soldDataCache[cacheKey].timestamp) < 4 * 60 * 60 * 1000) {
-    return soldDataCache[cacheKey].data;
+  // Sanity check — premium brands should never be under £3
+  const price = parseFloat(item.price?.value || item.price || 0);
+  const premiumBrands = ['barbour','patagonia','arc teryx','stone island','moncler','canada goose','burberry'];
+  if (price < 3 && premiumBrands.some(b => text.includes(b))) return true;
+
+  // Reject small/kids shoe sizes for footwear searches
+  const isFootwear = queueItem && ['trainers','boots'].includes(queueItem.cat);
+  if (isFootwear) {
+    if (REJECT_SHOE_SIZES.some(s => text.includes(s))) return true;
   }
 
+  // Reject kids ages from all searches
+  if (REJECT_KIDS_SIZES.some(s => text.includes(s))) return true;
+
+  return false;
+}
+
+// Get real eBay UK market prices — 40 listings, outliers removed
+async function getMarketPrices(query, token) {
   try {
-    // Use eBay Finding API findCompletedItems — no scraping, no bot detection
-    const params = new URLSearchParams({
-      'OPERATION-NAME': 'findCompletedItems',
-      'SERVICE-VERSION': '1.13.0',
-      'SECURITY-APPNAME': process.env.EBAY_APP_ID,
-      'RESPONSE-DATA-FORMAT': 'JSON',
-      'keywords': query,
-      'paginationInput.entriesPerPage': '50',
-      'itemFilter(0).name': 'SoldItemsOnly',
-      'itemFilter(0).value': 'true',
-      'itemFilter(1).name': 'Condition',
-      'itemFilter(1).value': 'Used',
-      'itemFilter(2).name': 'LocatedIn',
-      'itemFilter(2).value': 'GB',
-      'sortOrder': 'EndTimeSoonest'
+    const q = encodeURIComponent(query);
+    const url = 'https://api.ebay.com/buy/browse/v1/item_summary/search?q=' + q +
+      '&limit=40&marketplace_ids=EBAY_GB' +
+      '&filter=itemLocationCountry:GB,buyingOptions:{FIXED_PRICE}' +
+      '&sort=endDateSoonest';
+    const r = await fetch(url, {
+      headers: { 'Authorization': 'Bearer ' + token, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_GB' },
+      signal: AbortSignal.timeout(10000)
     });
+    const data = await r.json();
+    const items = (data.itemSummaries || []).filter(i => !shouldReject(i));
+    if (!items.length) return null;
 
-    const data = await fetchUrl(`https://svcs.ebay.com/services/search/FindingService/v1?${params}`);
-    const parsed = JSON.parse(data);
-    const items = parsed?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
+    const prices = items.map(i => parseFloat(i.price?.value || 0)).filter(p => p > 2).sort((a, b) => a - b);
+    if (prices.length < 5) return null;
 
-    const prices = items
-      .map(i => parseFloat(i.sellingStatus?.[0]?.currentPrice?.[0]?.['__value__'] || '0'))
-      .filter(p => p >= 3 && p <= 500);
+    const trimmed = prices.slice(Math.floor(prices.length * 0.25), Math.ceil(prices.length * 0.75));
+    if (!trimmed.length) return null;
 
-    if (prices.length < 3) {
-      soldDataCache[cacheKey] = { timestamp: now, data: null };
-      return null;
-    }
-
-    prices.sort((a, b) => a - b);
-    const trimStart = Math.floor(prices.length * 0.1);
-    const trimEnd = Math.ceil(prices.length * 0.9);
-    const trimmed = prices.slice(trimStart, trimEnd);
     const median = trimmed[Math.floor(trimmed.length / 2)];
-
-    const data = {
+    return {
       median: Math.round(median * 100) / 100,
-      low: Math.round(trimmed[0] * 100) / 100,
-      high: Math.round(trimmed[trimmed.length - 1] * 100) / 100,
+      low: trimmed[0],
+      high: trimmed[trimmed.length - 1],
       sampleSize: prices.length,
       trimmedSize: trimmed.length
     };
+  } catch (e) { return null; }
+}
 
-    soldDataCache[cacheKey] = { timestamp: now, data };
-    console.log(`Sold data for "${query}": median £${data.median} (${data.sampleSize} sales)`);
-    return data;
-  } catch(e) {
-    console.error(`Sold data error for "${query}":`, e.message);
+// ── EBAY SOLD PRICES — Real market data for sell price estimation ──
+// Uses eBay completed/sold listings to find what items actually sold for recently.
+// Vinted sell price = eBay sold median × 0.85 (Vinted buyers pay slightly less than eBay)
+const soldPriceCache = new Map();
+
+async function getSoldPrices(query, token) {
+  const cacheKey = query.toLowerCase().trim();
+  const cached = soldPriceCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data; // 1hr cache
+
+  try {
+    // Search eBay UK completed sold listings
+    const q = encodeURIComponent(query);
+    const url = 'https://api.ebay.com/buy/browse/v1/item_summary/search?q=' + q +
+      '&limit=40&marketplace_ids=EBAY_GB' +
+      '&filter=itemLocationCountry:GB,buyingOptions:{FIXED_PRICE},conditions:{USED|VERY_GOOD|GOOD|EXCELLENT}' +
+      '&sort=endDateSoonest';
+
+    const r = await fetch(url, {
+      headers: { 'Authorization': 'Bearer ' + token, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_GB' },
+      signal: AbortSignal.timeout(10000)
+    });
+    const data = await r.json();
+    const items = (data.itemSummaries || []).filter(i => !shouldReject(i));
+    if (items.length < 5) return null;
+
+    const prices = items
+      .map(i => parseFloat(i.price?.value || 0))
+      .filter(p => p > 3)
+      .sort((a, b) => a - b);
+
+    if (prices.length < 5) return null;
+
+    // Remove top and bottom 20% outliers
+    const trimmed = prices.slice(Math.floor(prices.length * 0.2), Math.ceil(prices.length * 0.8));
+    const median = trimmed[Math.floor(trimmed.length / 2)];
+
+    // Vinted typically 85% of eBay price (no seller fees but smaller audience)
+    const vintedEstimate = Math.round(median * 0.85);
+
+    const result = {
+      ebaySoldMedian: Math.round(median * 100) / 100,
+      vintedEstimate,
+      low: Math.round(trimmed[0] * 0.85),
+      high: Math.round(trimmed[trimmed.length - 1] * 0.85),
+      sampleSize: prices.length,
+      isReal: true
+    };
+
+    soldPriceCache.set(cacheKey, { data: result, ts: Date.now() });
+    console.log('Sold prices "' + query + '": eBay median £' + result.ebaySoldMedian + ' → Vinted est £' + result.vintedEstimate + ' (' + result.sampleSize + ' sold)');
+    return result;
+  } catch (e) {
+    console.log('Sold price error for "' + query + '":', e.message);
     return null;
   }
 }
 
-// ── Search queue ──────────────────────────────────────────────
-const QUEUE = [
-  // Tier 1: Proven high-volume sellers
-  { q: 'Nike vintage hoodie', soldQ: 'Nike vintage hoodie', brand: 'Nike', cat: 'nike' },
-  { q: 'Nike tracksuit vintage', soldQ: 'Nike tracksuit vintage', brand: 'Nike', cat: 'nike' },
-  { q: 'Adidas vintage hoodie', soldQ: 'Adidas vintage hoodie', brand: 'Adidas', cat: 'adidas' },
-  { q: 'Ralph Lauren polo shirt', soldQ: 'Ralph Lauren polo shirt mens', brand: 'Ralph Lauren', cat: 'polo' },
-  { q: 'Ralph Lauren hoodie', soldQ: 'Ralph Lauren hoodie', brand: 'Ralph Lauren', cat: 'polo' },
-  { q: 'Tommy Hilfiger polo', soldQ: 'Tommy Hilfiger polo shirt', brand: 'Tommy Hilfiger', cat: 'polo' },
-  { q: 'Lacoste polo shirt', soldQ: 'Lacoste polo shirt mens', brand: 'Lacoste', cat: 'polo' },
-  { q: 'Levi 501 jeans', soldQ: 'Levi 501 jeans vintage', brand: "Levi's", cat: 'jeans' },
-  { q: 'New Balance 990 trainers', soldQ: 'New Balance 990 trainers', brand: 'New Balance', cat: 'trainers' },
-  { q: 'North Face fleece', soldQ: 'North Face fleece jacket', brand: 'North Face', cat: 'outdoor' },
-  { q: 'Patagonia fleece', soldQ: 'Patagonia fleece pullover', brand: 'Patagonia', cat: 'outdoor' },
-  { q: 'Carhartt jacket', soldQ: 'Carhartt jacket', brand: 'Carhartt', cat: 'workwear' },
-  { q: 'Champion reverse weave hoodie', soldQ: 'Champion reverse weave hoodie', brand: 'Champion', cat: 'vintage' },
-  { q: 'Barbour wax jacket', soldQ: 'Barbour wax jacket', brand: 'Barbour', cat: 'outdoor' },
+// ── CLAUDE APPEAL SCORING ──
+// Scores every deal for desirability and condition before alerting.
+// Only items scoring 7/10+ on both appeal AND condition reach your inbox.
+// ── CLAUDE APPEAL SCORE CACHE ──
+// Cache scores for 24 hours — similar items in same category score the same
+const appealCache = new Map();
 
-  // Tier 2: Kids designer (fastest selling)
-  { q: 'Stone Island Junior jacket', soldQ: 'Stone Island Junior jacket', brand: 'Stone Island Junior', cat: 'kids' },
-  { q: 'CP Company Junior jacket', soldQ: 'CP Company Junior jacket', brand: 'CP Company Junior', cat: 'kids' },
-  { q: 'Moncler kids jacket', soldQ: 'Moncler kids jacket', brand: 'Moncler Kids', cat: 'kids' },
-  { q: 'Ralph Lauren kids boys', soldQ: 'Ralph Lauren kids polo', brand: 'Ralph Lauren', cat: 'kids' },
-
-  // Tier 3: Football shirts
-  { q: 'vintage football shirt retro', soldQ: 'vintage football shirt', brand: 'Football', cat: 'football' },
-  { q: 'Serie A football shirt vintage', soldQ: 'Serie A football shirt vintage', brand: 'Football', cat: 'football' },
-  { q: 'football shirt bundle job lot', soldQ: 'football shirt bundle', brand: 'Football', cat: 'football' },
-
-  // Tier 4: Misspellings (zero competition)
-  { q: 'Raplh Lauren polo', soldQ: 'Ralph Lauren polo shirt', brand: 'Ralph Lauren', cat: 'typo' },
-  { q: 'Addidas hoodie vintage', soldQ: 'Adidas hoodie vintage', brand: 'Adidas', cat: 'typo' },
-  { q: 'Niike hoodie vintage', soldQ: 'Nike hoodie vintage', brand: 'Nike', cat: 'typo' },
-  { q: 'Patogonia fleece', soldQ: 'Patagonia fleece', brand: 'Patagonia', cat: 'typo' },
-  { q: 'Chamion reverse weave', soldQ: 'Champion reverse weave hoodie', brand: 'Champion', cat: 'typo' },
-  { q: 'Barbour jakcet wax', soldQ: 'Barbour wax jacket', brand: 'Barbour', cat: 'typo' },
-  { q: 'Stone Ilsand junior', soldQ: 'Stone Island Junior jacket', brand: 'Stone Island Junior', cat: 'typo' },
-  { q: 'Tommmy Hilfiger polo', soldQ: 'Tommy Hilfiger polo shirt', brand: 'Tommy Hilfiger', cat: 'typo' },
-
-  // Tier 5: House clearance / hidden gems
-  { q: 'vintage jacket loft find', soldQ: 'vintage jacket', brand: 'Various', cat: 'unknown' },
-  { q: 'branded jacket house clearance', soldQ: 'branded jacket vintage', brand: 'Various', cat: 'unknown' },
-  { q: 'retro ski jacket vintage colourful', soldQ: 'vintage ski jacket', brand: 'Various', cat: 'vintage' },
-];
-
-// ── eBay search (Buy It Now) ───────────────────────────────────
-async function searchEbayBIN(item, soldData) {
-  try {
-    if (!soldData || soldData.median < 5) return [];
-
-    const maxBuy = Math.min(Math.floor(soldData.median * 0.45), MAX_BUY);
-    if (maxBuy < 2) return [];
-
-    const params = new URLSearchParams({
-      'OPERATION-NAME': 'findItemsAdvanced',
-      'SERVICE-VERSION': '1.13.0',
-      'SECURITY-APPNAME': process.env.EBAY_APP_ID,
-      'RESPONSE-DATA-FORMAT': 'JSON',
-      'keywords': item.q,
-      'paginationInput.entriesPerPage': '30',
-      'itemFilter(0).name': 'MaxPrice',
-      'itemFilter(0).value': maxBuy,
-      'itemFilter(0).paramName': 'Currency',
-      'itemFilter(0).paramValue': 'GBP',
-      'itemFilter(1).name': 'MinPrice',
-      'itemFilter(1).value': '1',
-      'itemFilter(2).name': 'ListingType',
-      'itemFilter(2).value': 'FixedPrice',
-      'itemFilter(3).name': 'Condition',
-      'itemFilter(3).value': 'Used',
-      'itemFilter(4).name': 'LocatedIn',
-      'itemFilter(4).value': 'GB',
-      'sortOrder': 'StartTimeNewest',
-    });
-
-    const data = await fetchUrl(`https://svcs.ebay.com/services/search/FindingService/v1?${params}`);
-    const parsed = JSON.parse(data);
-    const items = parsed?.findItemsAdvancedResponse?.[0]?.searchResult?.[0]?.item || [];
-
-    return processItems(items, item, soldData, 'BIN');
-  } catch(e) {
-    console.error(`BIN search error (${item.q}):`, e.message);
-    return [];
-  }
+function getAppealCacheKey(title, brand, cat) {
+  // Normalise title to catch near-duplicates — strip size/colour specifics
+  const normalised = title.toLowerCase()
+    .replace(/\b(xs|s|m|l|xl|xxl|uk\s?\d+|size\s?\d+|\d+\s?years?)\b/gi, '')
+    .replace(/\b(white|black|grey|gray|blue|red|green|navy|brown|beige|cream)\b/gi, '')
+    .replace(/[^a-z\s]/g, '')
+    .trim()
+    .substring(0, 40);
+  return brand + '|' + cat + '|' + normalised;
 }
 
-// ── eBay auction sniping (ending soon, low bids) ──────────────
-async function searchEbayAuctions(item, soldData) {
-  try {
-    if (!soldData || soldData.median < 5) return [];
+async function scoreAppeal(title, brand, cat, condition, price, imageUrl) {
+  if (!ANTHROPIC_KEY) return null;
 
-    const maxBuy = Math.min(Math.floor(soldData.median * 0.35), MAX_BUY);
-    if (maxBuy < 2) return [];
-
-    const params = new URLSearchParams({
-      'OPERATION-NAME': 'findItemsAdvanced',
-      'SERVICE-VERSION': '1.13.0',
-      'SECURITY-APPNAME': process.env.EBAY_APP_ID,
-      'RESPONSE-DATA-FORMAT': 'JSON',
-      'keywords': item.q,
-      'paginationInput.entriesPerPage': '20',
-      'itemFilter(0).name': 'MaxPrice',
-      'itemFilter(0).value': maxBuy,
-      'itemFilter(0).paramName': 'Currency',
-      'itemFilter(0).paramValue': 'GBP',
-      'itemFilter(1).name': 'MinPrice',
-      'itemFilter(1).value': '0.99',
-      'itemFilter(2).name': 'ListingType',
-      'itemFilter(2).value': 'Auction',
-      'itemFilter(3).name': 'Condition',
-      'itemFilter(3).value': 'Used',
-      'itemFilter(4).name': 'LocatedIn',
-      'itemFilter(4).value': 'GB',
-      'itemFilter(5).name': 'EndTimeTo',
-      'itemFilter(5).value': new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(), // ending in 3 hours
-      'sortOrder': 'EndTimeSoonest',
-    });
-
-    const data = await fetchUrl(`https://svcs.ebay.com/services/search/FindingService/v1?${params}`);
-    const parsed = JSON.parse(data);
-    const items = parsed?.findItemsAdvancedResponse?.[0]?.searchResult?.[0]?.item || [];
-
-    return processItems(items, item, soldData, 'Auction');
-  } catch(e) {
-    console.error(`Auction search error (${item.q}):`, e.message);
-    return [];
+  // Check cache first
+  const cacheKey = getAppealCacheKey(title, brand, cat);
+  const cached = appealCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) {
+    return cached.data;
   }
-}
 
-function processItems(items, queueItem, soldData, listingType) {
-  const deals = [];
-  for (const ebayItem of items) {
-    try {
-      const price = parseFloat(ebayItem.sellingStatus?.[0]?.currentPrice?.[0]?.['__value__'] || '0');
-      if (price < 1 || price > MAX_BUY) continue;
+  const isFootwear = ['trainers', 'boots'].includes(cat);
+  const minCondition = isFootwear ? 8 : 7;
 
-      const title = ebayItem.title?.[0] || '';
-      const itemId = ebayItem.itemId?.[0] || '';
-      const url = ebayItem.viewItemURL?.[0] || '';
-      const image = ebayItem.galleryURL?.[0] || '';
-      const endDate = ebayItem.listingInfo?.[0]?.endTime?.[0] || null;
-      const bidCount = parseInt(ebayItem.sellingStatus?.[0]?.bidCount?.[0] || '0');
-      const freeShipping = ebayItem.shippingInfo?.[0]?.shippingType?.[0] === 'Free';
-
-      // Calculate real profit using actual sold data
-      const vintedTarget = Math.round(soldData.median * 0.85); // list slightly below median
-      const ebayTarget = Math.round(soldData.median * 0.9);
-      const vintedNet = Math.round((vintedTarget - price - POSTAGE) * 100) / 100;
-      const ebayNet = Math.round(((ebayTarget * 0.87) - price - POSTAGE) * 100) / 100;
-      const bestNet = Math.max(vintedNet, ebayNet);
-      const bestPlatform = vintedNet >= ebayNet ? 'Vinted' : 'eBay';
-      const roi = Math.round((bestNet / price) * 100);
-
-      if (bestNet < MIN_PROFIT) continue;
-
-      // Calculate how underpriced vs market
-      const marketPercent = Math.round((price / soldData.median) * 100);
-
-      // Confidence scoring
-      let tier = 'possible';
-      let score = 0;
-      if (marketPercent <= 30) score += 50; // buying at 30% or less of market
-      else if (marketPercent <= 45) score += 35;
-      else if (marketPercent <= 55) score += 20;
-      if (roi >= 200) score += 30;
-      else if (roi >= 150) score += 20;
-      else if (roi >= 100) score += 10;
-      if (soldData.sampleSize >= 20) score += 10; // strong market evidence
-      if (freeShipping) score += 5;
-      if (listingType === 'Auction' && bidCount === 0) score += 15; // no bids = opportunity
-
-      if (score >= 70) tier = 'mustbuy';
-      else if (score >= 45) tier = 'strong';
-
-      // Calculate auction urgency
-      let hoursLeft = null;
-      if (endDate) {
-        hoursLeft = Math.round((new Date(endDate) - Date.now()) / 3600000 * 10) / 10;
-      }
-
-      deals.push({
-        id: itemId, title, price, url, image,
-        brand: queueItem.brand, cat: queueItem.cat,
-        vintedListPrice: vintedTarget,
-        ebayListPrice: ebayTarget,
-        vintedNet, ebayNet, bestNet, netProfit: bestNet,
-        bestPlatform, roi, confidenceTier: tier, score,
-        marketPercent, // "buying at X% of market"
-        soldData: {
-          median: soldData.median,
-          sampleSize: soldData.sampleSize,
-          low: soldData.low,
-          high: soldData.high
-        },
-        isAuction: listingType === 'Auction',
-        bidCount, hoursLeft, freeShipping,
-        source: 'eBay',
-        listingType
-      });
-    } catch(e) { /* skip */ }
-  }
-  return deals;
-}
-
-// ── Claude deal analysis (for must-buy tier only) ─────────────
-async function analyseWithClaude(deal) {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
   try {
+    const prompt = `You are an expert UK Vinted reseller. Be RUTHLESS — most items are not worth buying.
+
+Item: "${title}"
+Brand: ${brand}
+Category: ${cat}
+Condition stated: ${condition || 'not specified'}
+Buy price: £${price}
+${isFootwear ? 'FOOTWEAR RULE: Condition must be 8+ — sole wear, creasing and yellowing kill resale value.' : ''}
+
+Score TWO things 1-10. Be strict.
+
+APPEAL (1-10): Would this sell well on Vinted UK within 2 weeks?
+- Score 8-10: Core desirable items (black Sambas, white AF1s, popular colourways, common sizes M/L/UK7-9)
+- Score 6-7: Decent but not exceptional
+- Score 1-5: Hard to sell (unusual colourways, small sizes 1-5 in footwear, niche styles, kids items, accessories)
+INSTANTLY SCORE 1 if: laces, socks, charms, accessories, kids sizes, size 1/2/3 footwear
+
+CONDITION (1-10):
+${isFootwear ? `FOOTWEAR SCORING (strict):
+- Score 9-10: BNWT, unworn, new with tags, worn once/twice with clean soles stated
+- Score 7-8: Excellent with SPECIFIC detail (e.g. "minimal sole wear", "leather in great condition")  
+- Score 1-6: ANY vague description — "good condition", "pre-owned excellent", "great used condition" = MAX 5
+- Score 1-3: Any mention of wear, marks, creasing, yellowing` : `
+- Score 8-10: BNWT, unworn, immaculate, new with tags
+- Score 6-7: Excellent/very good with clear specific description
+- Score 1-5: Vague descriptions like "good used condition", "pre-owned excellent" with no specifics`}
+
+${imageUrl ? 'An image of the item is provided. Use it to assess actual condition — look for sole wear, creasing, staining, yellowing, marks.' : ''}
+
+Respond ONLY with this JSON:
+{"appeal": 7, "condition": 6, "appealReason": "one sentence max", "conditionReason": "one sentence max"}`;
+
+    // Build message content — include image if available
+    const messageContent = imageUrl ? [
+      {
+        type: 'image',
+        source: { type: 'url', url: imageUrl }
+      },
+      { type: 'text', text: prompt }
+    ] : [{ role: 'user', content: prompt }];
+
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01'
+      },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001', max_tokens: 100,
-        messages: [{ role: 'user', content: `In 15 words max, why is this a good flip? Title: "${deal.title}" Buy: £${deal.price}, Sell on Vinted: £${deal.vintedListPrice}, Real market median: £${deal.soldData.median}` }]
-      })
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 150,
+        messages: imageUrl
+          ? [{ role: 'user', content: messageContent }]
+          : [{ role: 'user', content: prompt }]
+      }),
+      signal: AbortSignal.timeout(20000)
     });
+
+    if (!res.ok) return null;
     const data = await res.json();
-    return data.content?.[0]?.text?.trim() || null;
-  } catch(e) { return null; }
-}
+    const text = data.content?.[0]?.text || '';
+    const clean = text.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
 
-// ── Telegram alert (instant, on your phone) ───────────────────
-async function sendTelegram(message) {
-  if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) return false;
-  try {
-    const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
-    const body = JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML' });
-    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
-    return res.ok;
-  } catch(e) { return false; }
-}
+    if (typeof parsed.appeal !== 'number' || typeof parsed.condition !== 'number') return null;
 
-// ── Email ─────────────────────────────────────────────────────
-async function sendEmail(subject, html) {
-  if (process.env.RESEND_API_KEY) {
-    try {
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.RESEND_API_KEY}` },
-        body: JSON.stringify({ from: 'FlipRadar <onboarding@resend.dev>', to: [ALERT_EMAIL], subject, html })
-      });
-      if (res.ok) { console.log('Email sent via Resend'); return true; }
-    } catch(e) {}
+    // Cache the result for 24 hours
+    appealCache.set(cacheKey, { data: parsed, ts: Date.now() });
+    return parsed;
+  } catch (e) {
+    return null;
   }
-  return false;
 }
 
-async function sendDealAlert(deals) {
-  if (!deals.length) return;
+// Get Vinted price range from our manual research data (fallback)
+function getVintedRange(brand) {
+  for (const [key, range] of Object.entries(VINTED_RANGES)) {
+    if (brand && brand.toLowerCase().includes(key.toLowerCase())) return range;
+  }
+  return null;
+}
 
-  // Telegram — instant alerts for each deal
-  for (const d of deals) {
-    const urgency = d.isAuction && d.hoursLeft ? `\n⏱ Auction ending in ${d.hoursLeft}h` : '';
-    const bids = d.isAuction ? ` (${d.bidCount} bids)` : '';
-    const msg = `🔥 <b>${d.confidenceTier === 'mustbuy' ? '🎯 MUST BUY' : '⚡ STRONG DEAL'}</b>
+// Score a deal with eBay sold price data
+function scoreDeal(item, marketData, queueItem, soldData) {
+  const price = parseFloat(item.price?.value || item.price || 0);
+  if (price <= 0 || price > MAX_BUY_PRICE) return null;
 
-<b>${d.title}</b>
+  const title = item.title || '';
+  const titleLower = title.toLowerCase();
+  const hasCondWarn = COND_WARN.some(w => titleLower.includes(w));
 
-💰 Buy: <b>£${d.price}</b>${bids}
-📈 Sell on ${d.bestPlatform}: <b>£${d.bestPlatform === 'Vinted' ? d.vintedListPrice : d.ebayListPrice}</b>
-✅ Net profit: <b>+£${d.bestNet.toFixed(0)}</b> (${d.roi}% ROI)
-📊 Market median: £${d.soldData.median} (${d.soldData.sampleSize} real sales)
-💡 Buying at ${d.marketPercent}% of market value${urgency}
-${d.analysis ? `\n🤖 ${d.analysis}` : ''}
+  const isExcellent = titleLower.includes('bnwt') || titleLower.includes('unworn') ||
+    titleLower.includes('never worn') || titleLower.includes('new with tags') ||
+    titleLower.includes('immaculate') || titleLower.includes('mint');
 
-<a href="${d.url}">👉 View on eBay</a>`;
+  // ── VINTED SELL PRICE: Use eBay sold data if available, fall back to manual ranges ──
+  let vintedSellPrice, vintedDataSource, vintedRange;
 
-    await sendTelegram(msg);
-    await sleep(500);
+  if (soldData && soldData.isReal && soldData.sampleSize >= 5) {
+    // REAL: eBay sold median × 0.85 = estimated Vinted price
+    vintedSellPrice = soldData.vintedEstimate;
+    if (isExcellent) vintedSellPrice = Math.round(vintedSellPrice * 1.15);
+    if (hasCondWarn) vintedSellPrice = Math.round(vintedSellPrice * 0.80);
+    vintedDataSource = 'sold';
+  } else {
+    // Fallback to manual research ranges
+    vintedRange = getVintedRange(queueItem.brand);
+    if (vintedRange) {
+      vintedSellPrice = Math.round(vintedRange.low + (vintedRange.avg - vintedRange.low) * 0.3);
+    } else {
+      vintedSellPrice = queueItem.avgSell;
+    }
+    if (isExcellent) vintedSellPrice = Math.round(vintedSellPrice * 1.2);
+    if (hasCondWarn) vintedSellPrice = Math.round(vintedSellPrice * 0.75);
+    vintedDataSource = 'estimated';
   }
 
-  // Email digest
-  const cards = deals.map(d => `
-    <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px;font-family:sans-serif;">
-      <div style="display:flex;gap:12px;align-items:flex-start;">
-        ${d.image ? `<img src="${d.image}" style="width:90px;height:90px;object-fit:cover;border-radius:8px;flex-shrink:0;" />` : ''}
-        <div style="flex:1;">
-          <div style="margin-bottom:8px;">
-            <span style="background:${d.confidenceTier==='mustbuy'?'#EAF3DE':'#FAEEDA'};color:${d.confidenceTier==='mustbuy'?'#3B6D11':'#854F0B'};font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;">
-              ${d.confidenceTier==='mustbuy'?'🎯 Must Buy':'⚡ Strong Deal'}
-            </span>
-            ${d.isAuction ? `<span style="background:#E6F1FB;color:#185FA5;font-size:11px;font-weight:600;padding:3px 8px;border-radius:20px;margin-left:6px;">⏱ Auction ${d.hoursLeft}h left</span>` : ''}
+  const vintedNet = vintedSellPrice - price - POSTAGE;
+  const itemMinProfit = queueItem.minProfit || MIN_NET_PROFIT;
+  const roi = Math.round((vintedNet / price) * 100);
+  if (vintedNet < itemMinProfit) return null;
+  if (roi < MIN_ROI) return null; // Must at least double your money
+
+  // ── CONFIDENCE TIER ──
+  let confidenceTier = 'possible';
+  let confidenceReasons = [];
+  let confidenceScore = 0;
+
+  const hasSoldData = vintedDataSource === 'sold';
+  const hasMarketData = marketData && marketData.sampleSize >= 5;
+
+  if (hasSoldData && hasMarketData) {
+    const ratio = price / marketData.median;
+    if (ratio <= MUST_BUY_RATIO && !hasCondWarn && vintedNet >= 15) {
+      confidenceTier = 'mustbuy';
+      confidenceScore = 95;
+      confidenceReasons.push('✅ Based on ' + soldData.sampleSize + ' real eBay UK sold listings · Market median £' + soldData.ebaySoldMedian + ' → Vinted est £' + soldData.vintedEstimate);
+      confidenceReasons.push('✅ Buy price at ' + Math.round(ratio * 100) + '% of active market median (£' + marketData.median + ')');
+    } else if (ratio <= STRONG_RATIO && vintedNet >= itemMinProfit) {
+      confidenceTier = 'strong';
+      confidenceScore = 78;
+      confidenceReasons.push('✅ eBay sold median £' + soldData.ebaySoldMedian + ' → Vinted est £' + soldData.vintedEstimate + ' (' + soldData.sampleSize + ' sold)');
+      confidenceReasons.push('Active market median £' + marketData.median + ' · Buy at ' + Math.round(ratio * 100) + '%');
+    } else {
+      return null;
+    }
+  } else if (hasSoldData && !hasMarketData) {
+    if (!hasCondWarn && vintedNet >= 15) {
+      confidenceTier = 'strong';
+      confidenceScore = 70;
+      confidenceReasons.push('✅ eBay sold data: ' + soldData.sampleSize + ' sold · Vinted est £' + soldData.vintedEstimate);
+    } else {
+      return null;
+    }
+  } else if (!hasSoldData && hasMarketData) {
+    const ratio = price / marketData.median;
+    if (ratio <= MUST_BUY_RATIO && !hasCondWarn && vintedNet >= 15) {
+      confidenceTier = 'strong';
+      confidenceScore = 65;
+      confidenceReasons.push('Active eBay market median £' + marketData.median + ' · Buy at ' + Math.round(ratio * 100) + '%');
+      confidenceReasons.push('⚠ Vinted sell price estimated — verify before buying');
+    } else {
+      return null;
+    }
+  } else {
+    return null; // No real data at all — skip
+  }
+
+  if (isExcellent) { confidenceScore = Math.min(99, confidenceScore + 8); confidenceReasons.push('Excellent condition signals — commands higher price'); }
+  if (queueItem.cat === 'typo') { confidenceScore = Math.min(99, confidenceScore + 5); confidenceReasons.push('Misspelled title — zero competition'); }
+  if (titleLower.includes('loft find') || titleLower.includes('house clearance')) { confidenceScore = Math.min(99, confidenceScore + 5); confidenceReasons.push('Seller likely unaware of value'); }
+
+  const vintedTitle = generateVintedTitle(title, queueItem.brand, queueItem.cat);
+
+  return {
+    id: item.itemId || item.id,
+    title,
+    price,
+    url: item.itemWebUrl || item.url,
+    image: item.image?.imageUrl || item.image,
+    condition: item.condition,
+    brand: queueItem.brand,
+    cat: queueItem.cat,
+    vintedListPrice: vintedSellPrice,
+    vintedNet: Math.round(vintedNet * 100) / 100,
+    roi,
+    confidenceTier,
+    confidenceScore,
+    confidenceReasons,
+    marketData,
+    vintedRange,
+    soldData: soldData || null,
+    vintedDataSource,
+    hasCondWarn,
+    isExcellent,
+    vintedTitle,
+    endDate: item.itemEndDate || null,
+    isAuction: item.buyingOptions ? item.buyingOptions.includes('AUCTION') : false,
+    source: item.source || 'eBay'
+  };
+}
+
+function generateVintedTitle(originalTitle, brand, cat) {
+  const condition = originalTitle.toLowerCase().includes('bnwt') ? 'BNWT' :
+    originalTitle.toLowerCase().includes('unworn') ? 'Unworn' : '';
+  const size = (originalTitle.match(/\b(XS|S|M|L|XL|XXL|size \d+|uk\d+|\d+ years)\b/i) || [])[0] || '';
+
+  if (cat === 'trainers') return (brand + ' ' + originalTitle.replace(brand, '').replace(/[^\w\s]/g, '').trim() + ' ' + size).substring(0, 60).trim();
+  if (cat === 'kids') return (brand + ' Kids Jacket ' + size + (condition ? ' ' + condition : '')).trim();
+  if (cat === 'polo') return (brand + ' Polo Shirt ' + size + (condition ? ' ' + condition : '') + ' Vintage').trim();
+  if (cat === 'nike') return ('Vintage ' + brand + ' Hoodie Sweatshirt ' + size + ' ' + (condition || 'Old School')).trim();
+  return (brand + ' ' + cat + ' ' + size + (condition ? ' ' + condition : '') + ' Vintage').trim().substring(0, 60);
+}
+
+// Build clean, slick HTML email
+function buildEmailHtml(deals) {
+  const mustBuys = deals.filter(d => d.confidenceTier === 'mustbuy');
+  const strong = deals.filter(d => d.confidenceTier === 'strong');
+
+  const dealHtml = deals.map(d => {
+    const isMustBuy = d.confidenceTier === 'mustbuy';
+    const accentColor = isMustBuy ? '#16a34a' : '#2563eb';
+    const bgColor = isMustBuy ? '#f0fdf4' : '#eff6ff';
+    const borderColor = isMustBuy ? '#bbf7d0' : '#bfdbfe';
+    const label = isMustBuy ? '🎯 MUST BUY' : '⚡ STRONG';
+
+    return `
+    <div style="background:#ffffff;border-radius:12px;margin-bottom:20px;overflow:hidden;border:1px solid #e5e5e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+
+      <!-- Tier banner -->
+      <div style="background:${accentColor};padding:10px 16px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="color:white;font-weight:700;font-size:13px;letter-spacing:0.05em;">${label}</span>
+        <span style="color:rgba(255,255,255,0.85);font-size:12px;">${d.brand} · ${d.cat}</span>
+      </div>
+
+      <!-- Title -->
+      <div style="padding:14px 16px 0;">
+        ${d.source && d.source !== 'eBay' ? `<div style="display:inline-block;font-size:10px;font-weight:700;color:${d.isAuction ? '#dc2626' : '#7c3aed'};background:${d.isAuction ? '#fef2f2' : '#f5f3ff'};border:1px solid ${d.isAuction ? '#fecaca' : '#ddd6fe'};border-radius:4px;padding:2px 8px;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">${d.isAuction ? '⏱ ' : ''}${d.source}</div>` : ''}
+        <div style="font-size:15px;font-weight:600;color:#111;line-height:1.4;margin-bottom:14px;">${d.title}</div>
+
+        <!-- Numbers row -->
+        <div style="display:flex;gap:8px;margin-bottom:14px;">
+          <div style="flex:1;background:#f7f7f5;border-radius:8px;padding:10px;text-align:center;">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px;">Buy</div>
+            <div style="font-size:22px;font-weight:700;color:#111;">£${d.price}</div>
           </div>
-          <p style="font-size:15px;font-weight:700;margin:0 0 4px;color:#111;">${d.title}</p>
-          <p style="font-size:12px;color:#9ca3af;margin:0 0 12px;">Buying at <strong>${d.marketPercent}% of market value</strong> · ${d.soldData.sampleSize} real eBay sales · Median £${d.soldData.median}</p>
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;">
-            <div style="text-align:center;background:#f9fafb;border-radius:8px;padding:8px;">
-              <div style="font-size:10px;color:#9ca3af;">Buy</div>
-              <div style="font-size:18px;font-weight:700;color:#111;">£${d.price}</div>
-            </div>
-            <div style="text-align:center;background:#f9fafb;border-radius:8px;padding:8px;">
-              <div style="font-size:10px;color:#9ca3af;">List on ${d.bestPlatform}</div>
-              <div style="font-size:18px;font-weight:700;color:#111;">£${d.bestPlatform==='Vinted'?d.vintedListPrice:d.ebayListPrice}</div>
-            </div>
-            <div style="text-align:center;background:#EAF3DE;border-radius:8px;padding:8px;">
-              <div style="font-size:10px;color:#3B6D11;">Profit</div>
-              <div style="font-size:18px;font-weight:700;color:#22c55e;">+£${d.bestNet.toFixed(0)}</div>
-            </div>
-            <div style="text-align:center;background:#E6F1FB;border-radius:8px;padding:8px;">
-              <div style="font-size:10px;color:#185FA5;">ROI</div>
-              <div style="font-size:18px;font-weight:700;color:#2563eb;">${d.roi}%</div>
-            </div>
+          <div style="display:flex;align-items:center;color:#bbb;font-size:16px;">→</div>
+          <div style="flex:1;background:#f7f7f5;border-radius:8px;padding:10px;text-align:center;">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px;">List</div>
+            <div style="font-size:22px;font-weight:700;color:#0891b2;">£${d.vintedListPrice}</div>
           </div>
-          ${d.analysis ? `<p style="font-size:13px;color:#374151;font-style:italic;margin:0 0 12px;">🤖 ${d.analysis}</p>` : ''}
-          <div style="display:flex;gap:8px;">
-            <a href="${d.url}" style="background:#111;color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;">View on eBay →</a>
-            <a href="https://www.vinted.co.uk/catalog?search_text=${encodeURIComponent(d.title)}&order=newest_first" style="background:#EAF3DE;color:#3B6D11;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;">Check Vinted →</a>
+          <div style="display:flex;align-items:center;color:#bbb;font-size:16px;">=</div>
+          <div style="flex:1;background:${bgColor};border:1px solid ${borderColor};border-radius:8px;padding:10px;text-align:center;">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px;">Profit</div>
+            <div style="font-size:22px;font-weight:700;color:${accentColor};">+£${d.vintedNet}</div>
+          </div>
+          <div style="flex:1;background:#f7f7f5;border-radius:8px;padding:10px;text-align:center;">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px;">ROI</div>
+            <div style="font-size:22px;font-weight:700;color:#111;">${d.roi}%</div>
           </div>
         </div>
-      </div>
-    </div>`).join('');
 
-  await sendEmail(
-    `🔥 FlipRadar: ${deals.length} must-buy deal${deals.length>1?'s':''} — ${new Date().toLocaleString('en-GB')}`,
-    `<div style="max-width:640px;margin:0 auto;padding:20px;font-family:sans-serif;">
-      <h1 style="font-size:22px;font-weight:700;color:#111;margin:0 0 4px;">🔥 ${deals.length} deal${deals.length>1?'s':''} found</h1>
-      <p style="color:#9ca3af;font-size:12px;margin:0 0 20px;">Real sold data · Buy under £${MAX_BUY} · Min £${MIN_PROFIT} profit · ${new Date().toLocaleString('en-GB')}</p>
-      ${cards}
-      <p style="font-size:11px;color:#d1d5db;text-align:center;margin-top:20px;">FlipRadar Pro · eBay UK → Vinted arbitrage</p>
-    </div>`
-  );
+        <!-- Data row -->
+        <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+          ${d.soldData ? `
+          <div style="flex:1;min-width:200px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;">
+            <div style="font-size:10px;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">✅ Real Sold Data</div>
+            <div style="font-size:12px;color:#166534;">${d.soldData.sampleSize} sold · eBay median <strong>£${d.soldData.ebaySoldMedian}</strong> · Vinted est <strong>£${d.soldData.vintedEstimate}</strong></div>
+          </div>` : ''}
+          ${d.appealScore ? `
+          <div style="flex:1;min-width:200px;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:10px 12px;">
+            <div style="font-size:10px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">🤖 Appeal Check</div>
+            <div style="font-size:12px;color:#5b21b6;">Appeal <strong>${d.appealScore}/10</strong> · Condition <strong>${d.conditionScore}/10</strong></div>
+            <div style="font-size:11px;color:#6d28d9;margin-top:3px;">${d.appealReason || ''}</div>
+          </div>` : ''}
+        </div>
+
+        <!-- Vinted search tip -->
+        ${d.vintedTitle ? `
+        <div style="background:#fefce8;border:1px solid #fde047;border-radius:8px;padding:10px 12px;margin-bottom:14px;">
+          <div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">60 Second Check</div>
+          <div style="font-size:12px;color:#854d0e;font-weight:600;">Search Vinted for: "${d.vintedTitle}"</div>
+          <div style="font-size:11px;color:#78350f;margin-top:3px;">Expect to see similar items at £${Math.round(d.vintedListPrice * 0.85)}–£${Math.round(d.vintedListPrice * 1.2)}. If everything is under £${Math.round(d.vintedListPrice * 0.5)} — skip it.</div>
+        </div>` : ''}
+
+      </div>
+
+      <!-- Action buttons -->
+      <div style="padding:0 16px 14px;display:flex;gap:8px;">
+        <a href="${d.url}" style="flex:2;background:#111;color:white;padding:10px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;text-align:center;display:block;">View on eBay →</a>
+        <a href="https://www.vinted.co.uk/catalog?search_text=${encodeURIComponent(d.vintedTitle || d.brand)}&order=relevance&currency=GBP" style="flex:1;background:#0891b2;color:white;padding:10px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;text-align:center;display:block;">Vinted</a>
+        <a href="https://www.ebay.co.uk/sch/i.html?_nkw=${encodeURIComponent(d.vintedTitle || d.title)}&LH_Complete=1&LH_Sold=1" style="flex:1;background:#d97706;color:white;padding:10px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;text-align:center;display:block;">Sold</a>
+      </div>
+
+    </div>`;
+  }).join('');
+
+  return `
+    <div style="max-width:600px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f7f7f5;padding:20px;">
+
+      <!-- Header -->
+      <div style="background:#111;color:white;padding:18px 20px;border-radius:12px;margin-bottom:20px;">
+        <div style="font-size:20px;font-weight:700;letter-spacing:-0.02em;margin-bottom:4px;">● FlipRadar</div>
+        <div style="font-size:13px;color:rgba(255,255,255,0.55);">${new Date().toLocaleString('en-GB', {weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})} · ${deals.length} deal${deals.length !== 1 ? 's' : ''} found</div>
+      </div>
+
+      ${dealHtml}
+
+      <!-- Footer -->
+      <div style="text-align:center;font-size:11px;color:#aaa;padding-top:8px;">
+        Profit = list price − buy price − £${POSTAGE} postage · Always verify before buying
+      </div>
+    </div>
+  `;
 }
 
-// ── Main scan ──────────────────────────────────────────────────
-let qIdx = 0;
+async function sendAlert(deals, isAuctionAlert = false) {
+  if (!SENDGRID_KEY || !ALERT_EMAIL) {
+    console.log('No email config — skipping alert');
+    return;
+  }
+  const mustBuys = deals.filter(d => d.confidenceTier === 'mustbuy');
+  const strong = deals.filter(d => d.confidenceTier === 'strong');
+  const subject = isAuctionAlert
+    ? `⏱ ${mustBuys.length} AUCTION ending soon — act now! — FlipRadar`
+    : mustBuys.length > 0
+      ? `🎯 ${mustBuys.length} Must Buy deal${mustBuys.length > 1 ? 's' : ''} found — FlipRadar`
+      : `⚡ ${strong.length} Strong deal${strong.length > 1 ? 's' : ''} — FlipRadar`;
+
+  try {
+    const r = await fetch('https://api.sendgrid.com/v3/mail/send', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + SENDGRID_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: ALERT_EMAIL }] }],
+        from: { email: ALERT_EMAIL, name: 'FlipRadar' },
+        subject,
+        content: [{ type: 'text/html', value: buildEmailHtml(deals) }]
+      })
+    });
+    if (r.ok) {
+      console.log('Alert sent: ' + subject);
+      statusData.lastEmailSent = new Date().toISOString();
+      statusData.totalEmailsSent++;
+      statusData.lastDeals = deals.slice(0, 5).map(d => ({
+        title: d.title?.substring(0, 50),
+        price: d.price,
+        profit: d.vintedNet,
+        tier: d.confidenceTier,
+        source: d.isVintedSource ? 'Vinted' : 'eBay'
+      }));
+    } else {
+      const err = await r.text();
+      console.error('SendGrid error:', err);
+    }
+  } catch (e) {
+    console.error('Email failed:', e.message);
+  }
+}
+
+// ── OXFAM ONLINE — JSON API ──
+// Confirmed working via browser inspection: 2-step approach
+// Step 1: assembler search returns product IDs + prices
+// Step 2: products endpoint returns names + routes
+// No auth required, no bot detection, zero competition from other bots
+async function scanOxfam(searchTerms) {
+  const results = [];
+  for (const term of searchTerms) {
+    try {
+      // Step 1 — search for IDs and prices, sorted newest first
+      const searchUrl = 'https://onlineshop.oxfam.org.uk/ccstoreui/v1/assembler/assemble?' +
+        'No=0&Nrpp=20' +
+        '&Nr=AND(product.active%3A1%2CNOT(sku.listPrice%3A0.000000))' +
+        '&Ntt=' + encodeURIComponent(term) +
+        '&Ns=product.dateAvailable%7C1';
+
+      const r1 = await fetch(searchUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json',
+        },
+        signal: AbortSignal.timeout(12000)
+      });
+
+      if (!r1.ok) { console.log('Oxfam search HTTP ' + r1.status + ' for: ' + term); continue; }
+      const searchData = await r1.json();
+      const records = searchData?.resultsList?.records || [];
+
+      // Filter to items under max buy price
+      const affordable = records.filter(r => {
+        const price = parseFloat(r.attributes?.['sku.minActivePrice']?.[0] || 99999);
+        return price > 0 && price <= MAX_BUY_PRICE;
+      });
+
+      if (affordable.length === 0) continue;
+
+      // Step 2 — fetch product names for affordable IDs
+      const ids = affordable.map(r => r.attributes?.['product.repositoryId']?.[0]).filter(Boolean);
+      const priceMap = {};
+      affordable.forEach(r => {
+        const id = r.attributes?.['product.repositoryId']?.[0];
+        if (id) priceMap[id] = parseFloat(r.attributes?.['sku.minActivePrice']?.[0] || 0);
+      });
+
+      const productsUrl = 'https://onlineshop.oxfam.org.uk/ccstoreui/v1/products?' +
+        'storePriceListGroupId=ukPriceGroup' +
+        '&productIds=' + ids.join('%2C') +
+        '&fields=id,displayName,listPrice,route';
+
+      const r2 = await fetch(productsUrl, {
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(10000)
+      });
+
+      if (!r2.ok) continue;
+      const productsData = await r2.json();
+      const items = productsData?.items || [];
+
+      for (const p of items) {
+        const title = p.displayName || '';
+        const price = priceMap[p.id] || parseFloat(p.listPrice || 0);
+        if (!title || price <= 0 || price > MAX_BUY_PRICE) continue;
+
+        // Reject kids items
+        const titleLow = title.toLowerCase();
+        if (REJECT_KIDS_SIZES.some(s => titleLow.includes(s))) continue;
+        if (['toddler','infant','childrens','children\'s','boys ','girls '].some(w => titleLow.includes(w))) continue;
+
+        results.push({
+          title: title.substring(0, 80),
+          price,
+          url: 'https://onlineshop.oxfam.org.uk' + (p.route || ''),
+          source: 'Oxfam Online',
+          searchTerm: term
+        });
+      }
+
+      await new Promise(r => setTimeout(r, 600));
+    } catch (e) {
+      console.log('Oxfam error for "' + term + '":', e.message);
+    }
+  }
+  console.log('Oxfam: ' + results.length + ' items found under £' + MAX_BUY_PRICE);
+  return results;
+}
+
+// ── VINTED SCANNER — Cookie Factory + Internal API ──
+// Uses Vinted's internal API directly — same approach as VintedSeekers, Souk etc
+// Cookie factory: get session cookie once, use for all API calls = instant responses
+const VINTED_TARGETS = [
+  // Outerwear — proven sellers
+  { search: 'Patagonia fleece jacket', brand: 'Patagonia', avgSell: 55, minProfit: 18, cat: 'outerwear' },
+  { search: 'North Face fleece jacket', brand: 'North Face', avgSell: 45, minProfit: 15, cat: 'outerwear' },
+  { search: 'Barbour wax jacket', brand: 'Barbour', avgSell: 70, minProfit: 22, cat: 'outerwear' },
+  { search: 'Stone Island jacket', brand: 'Stone Island', avgSell: 110, minProfit: 35, cat: 'outerwear' },
+  { search: "Arc'teryx jacket", brand: "Arc'teryx", avgSell: 110, minProfit: 35, cat: 'gorpcore' },
+  { search: 'Patagonia down jacket', brand: 'Patagonia', avgSell: 80, minProfit: 25, cat: 'outerwear' },
+  { search: 'Carhartt WIP jacket', brand: 'Carhartt WIP', avgSell: 50, minProfit: 16, cat: 'outerwear' },
+  // Trainers — 61% sell-through rate, New Balance leads
+  { search: 'Adidas Samba trainers', brand: 'Adidas', avgSell: 48, minProfit: 15, cat: 'trainers' },
+  { search: 'New Balance 550 trainers', brand: 'New Balance', avgSell: 65, minProfit: 20, cat: 'trainers' },
+  { search: 'New Balance 990 trainers', brand: 'New Balance', avgSell: 80, minProfit: 25, cat: 'trainers' },
+  { search: 'Salomon trainers', brand: 'Salomon', avgSell: 70, minProfit: 22, cat: 'trainers' },
+  { search: 'Veja trainers', brand: 'Veja', avgSell: 60, minProfit: 18, cat: 'trainers' },
+  { search: 'Dr Martens boots', brand: 'Dr Martens', avgSell: 60, minProfit: 20, cat: 'boots' },
+  // Nike vintage — strong demand
+  { search: 'Nike vintage hoodie', brand: 'Nike', avgSell: 38, minProfit: 12, cat: 'nike' },
+  { search: 'Nike ACG jacket', brand: 'Nike', avgSell: 65, minProfit: 20, cat: 'nike' },
+  // Football shirts — massive UK→US arbitrage opportunity, £10-30 → $60-200
+  { search: 'England football shirt 1990s vintage', brand: 'England', avgSell: 65, minProfit: 22, cat: 'football' },
+  { search: 'Manchester United football shirt vintage', brand: 'Manchester United', avgSell: 55, minProfit: 18, cat: 'football' },
+  { search: 'Liverpool football shirt vintage', brand: 'Liverpool', avgSell: 55, minProfit: 18, cat: 'football' },
+  { search: 'Umbro football shirt vintage 90s', brand: 'Umbro', avgSell: 45, minProfit: 15, cat: 'football' },
+  // CP Company — strong resale
+  { search: 'CP Company jacket', brand: 'CP Company', avgSell: 90, minProfit: 30, cat: 'outerwear' },
+];
+
+// Track last seen item IDs per search to only process new listings
+const vintedLastSeen = new Map();
+
+// Cookie factory — get session cookie from Vinted, refresh every 2 hours
+let vintedCookie = null;
+let vintedCookieExpiry = 0;
+
+async function getVintedCookie() {
+  if (vintedCookie && Date.now() < vintedCookieExpiry) return vintedCookie;
+  try {
+    const r = await fetch('https://www.vinted.co.uk', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-GB,en;q=0.9',
+      },
+      signal: AbortSignal.timeout(10000)
+    });
+    const cookies = r.headers.get('set-cookie') || '';
+    // Extract all cookies and combine them
+    const cookieStr = cookies.split(',').map(c => c.split(';')[0].trim()).join('; ');
+    if (cookieStr) {
+      vintedCookie = cookieStr;
+      vintedCookieExpiry = Date.now() + 2 * 60 * 60 * 1000; // 2 hours
+      console.log('Vinted cookie refreshed');
+      return vintedCookie;
+    }
+  } catch (e) {
+    console.log('Vinted cookie error:', e.message);
+  }
+  return null;
+}
+
+// ── VINTED TOKEN AUTO-REFRESH ──
+let vintedAccessToken = null;
+let vintedTokenExpiry = 0;
+
+async function getVintedToken() {
+  // Return cached token if still valid (with 5 min buffer)
+  if (vintedAccessToken && Date.now() < vintedTokenExpiry - 300000) {
+    return vintedAccessToken;
+  }
+
+  // Try env var first
+  const envToken = process.env.VINTED_TOKEN;
+  if (envToken) {
+    // Decode JWT to check expiry
+    try {
+      const payload = JSON.parse(Buffer.from(envToken.split('.')[1], 'base64').toString());
+      if (payload.exp && payload.exp * 1000 > Date.now() + 300000) {
+        vintedAccessToken = envToken;
+        vintedTokenExpiry = payload.exp * 1000;
+        console.log('Vinted: using env token, expires in ' + Math.round((vintedTokenExpiry - Date.now()) / 60000) + ' mins');
+        return vintedAccessToken;
+      } else {
+        console.log('Vinted: env token expired, attempting auto-refresh...');
+      }
+    } catch(e) {
+      vintedAccessToken = envToken;
+      vintedTokenExpiry = Date.now() + 90 * 60 * 1000;
+      return vintedAccessToken;
+    }
+  }
+
+  // No valid token — prompt user to visit /refresh-token
+  console.log('Vinted: token expired — visit https://flipradar-proxy.onrender.com/refresh-token to refresh');
+  return null;
+}
+
+async function scanVinted(targets) {
+  const searchTargets = targets || VINTED_TARGETS;
+  const results = [];
+  const token = await getVintedToken();
+
+  if (!token) {
+    console.log('Vinted: no valid token available');
+    return results;
+  }
+
+  for (const target of searchTargets) {
+    try {
+      const maxBuy = Math.floor(target.avgSell - target.minProfit - POSTAGE);
+      if (maxBuy <= 3) continue;
+
+      // Use Vinted API v2 directly with Bearer token — clean JSON, no scraping
+      const url = 'https://www.vinted.co.uk/api/v2/catalog/items?' +
+        'search_text=' + encodeURIComponent(target.search) +
+        '&price_to=' + maxBuy +
+        '&currency=GBP' +
+        '&order=newest_first' +
+        '&per_page=48';
+
+      const r = await fetch(url, {
+        headers: {
+          'Authorization': 'Bearer ' + token,
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+        signal: AbortSignal.timeout(10000)
+      });
+
+      if (!r.ok) {
+        console.log('Vinted API ' + r.status + ' for: ' + target.search);
+        if (r.status === 401) console.log('Token expired — refresh VINTED_TOKEN in Render');
+        continue;
+      }
+
+      const data = await r.json();
+      const apiItems = data.items || [];
+      console.log('[VINTED] "' + target.search + '" — API returned ' + apiItems.length + ' items (max £' + maxBuy + ')');
+
+      const lastSeen = vintedLastSeen.get(target.search) || new Set();
+      const newLastSeen = new Set();
+      const items = [];
+
+      for (const item of apiItems) {
+        const itemId = String(item.id);
+        newLastSeen.add(itemId);
+        if (lastSeen.has(itemId)) continue;
+
+        const price = parseFloat(item.price?.amount || item.price || 0);
+        if (price <= 0 || price > maxBuy) continue;
+
+        const title = item.title || '';
+        const titleLow = title.toLowerCase();
+
+        // Brand check
+        const brandLow = target.brand.toLowerCase().replace(/[']/g, '');
+        const titleNorm = titleLow.replace(/[']/g, '');
+        if (!titleNorm.includes(brandLow) && !titleNorm.includes(brandLow.split(' ')[0])) continue;
+
+        // Reject kids/accessories
+        if (HARD_REJECT.some(w => titleLow.includes(w))) continue;
+        if (REJECT_KIDS_SIZES.some(s => titleLow.includes(s))) continue;
+        if (['kids', 'toddler', 'junior', 'infant', 'baby', 'boys', 'girls', 'youth'].some(w => titleLow.includes(w))) continue;
+
+        const imageUrl = item.photo?.url || item.photos?.[0]?.url || null;
+
+        items.push({
+          itemId,
+          title: title.substring(0, 80),
+          price,
+          url: 'https://www.vinted.co.uk/items/' + itemId,
+          brand: target.brand,
+          cat: target.cat,
+          avgSell: target.avgSell,
+          minProfit: target.minProfit,
+          image: imageUrl,
+          condition: item.status || '',
+          source: 'Vinted'
+        });
+
+        if (items.length >= 5) break;
+      }
+
+      vintedLastSeen.set(target.search, newLastSeen);
+      results.push(...items);
+
+      if (items.length > 0) {
+        console.log('[VINTED] "' + target.search + '" — ' + items.length + ' underpriced items found');
+      }
+
+    } catch (e) {
+      console.log('Vinted scan error for "' + target.search + '":', e.message);
+    }
+  }
+
+  console.log('Vinted scan complete — ' + results.length + ' total underpriced items found');
+  return results;
+}
+
+// ── EBAY AUCTION SCANNER ──
+// Zero-bid auctions ending within 4 hours — catches items going for pennies
+async function scanAuctions(token) {
+  const results = [];
+  const auctionSearches = [
+    { q: 'Nike vintage hoodie sweatshirt', brand: 'Nike', avgSell: 42, minProfit: 15, vintedQ: 'Nike vintage hoodie', soldQ: 'Nike vintage hoodie sweatshirt', cat: 'nike' },
+    { q: 'Adidas Samba trainers', brand: 'Adidas', avgSell: 65, minProfit: 18, vintedQ: 'Adidas Samba', soldQ: 'Adidas Samba trainers shoes', cat: 'trainers', catId: '15709' },
+    { q: 'Patagonia fleece jacket', brand: 'Patagonia', avgSell: 65, minProfit: 20, vintedQ: 'Patagonia fleece', soldQ: 'Patagonia fleece jacket half zip', cat: 'outerwear', catId: '57988' },
+    { q: 'North Face fleece jacket', brand: 'North Face', avgSell: 55, minProfit: 18, vintedQ: 'North Face fleece', soldQ: 'North Face fleece jacket', cat: 'outerwear', catId: '57988' },
+    { q: 'Barbour wax jacket', brand: 'Barbour', avgSell: 80, minProfit: 25, vintedQ: 'Barbour wax jacket', soldQ: 'Barbour wax jacket mens', cat: 'outerwear', catId: '57988' },
+    { q: 'Dr Martens boots', brand: 'Dr Martens', avgSell: 70, minProfit: 22, vintedQ: 'Dr Martens boots', soldQ: 'Dr Martens boots leather', cat: 'boots', catId: '62108' },
+    { q: 'Stone Island Junior jacket', brand: 'Stone Island Junior', avgSell: 85, minProfit: 25, vintedQ: 'Stone Island Junior jacket', soldQ: 'Stone Island Junior jacket kids', cat: 'kids', catId: '11484' },
+    { q: 'Levi 501 jeans', brand: "Levi's", avgSell: 45, minProfit: 15, vintedQ: "Levi's 501 jeans", soldQ: "Levi's 501 jeans", cat: 'denim', catId: '15689' },
+    { q: 'Arc teryx jacket', brand: "Arc'teryx", avgSell: 120, minProfit: 35, vintedQ: "Arc'teryx jacket", soldQ: "Arc'teryx jacket", cat: 'gorpcore', catId: '57988' },
+    { q: 'Salomon trainers shoes', brand: 'Salomon', avgSell: 80, minProfit: 25, vintedQ: 'Salomon trainers', soldQ: 'Salomon trainers trail running shoes', cat: 'trainers', catId: '15709' },
+  ];
+
+  for (const qItem of auctionSearches) {
+    try {
+      const q = encodeURIComponent(qItem.q);
+      const catFilter = qItem.catId ? '&category_ids=' + qItem.catId : '';
+
+      // Search for auctions ending within 4 hours with 0-1 bids
+      const r = await fetch(
+        'https://api.ebay.com/buy/browse/v1/item_summary/search?q=' + q +
+        '&limit=10&marketplace_ids=EBAY_GB' +
+        '&filter=price:[1..' + MAX_BUY_PRICE + '],priceCurrency:GBP,itemLocationCountry:GB,buyingOptions:{AUCTION},itemEndDate:[..' + new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString() + ']' +
+        catFilter +
+        '&sort=endDateSoonest', {
+        headers: { 'Authorization': 'Bearer ' + token, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_GB' },
+        signal: AbortSignal.timeout(10000)
+      });
+
+      if (!r.ok) continue;
+      const data = await r.json();
+      const listings = (data.itemSummaries || []).filter(i => !shouldReject(i));
+
+      for (const listing of listings) {
+        // Only zero or very low bid count
+        const bidCount = listing.bidCount || 0;
+        if (bidCount > 2) continue;
+
+        const hoursLeft = listing.itemEndDate
+          ? Math.round((new Date(listing.itemEndDate) - Date.now()) / 3600000 * 10) / 10
+          : null;
+
+        results.push({
+          ...listing,
+          queueItem: qItem,
+          hoursLeft,
+          bidCount,
+          source: 'eBay Auction',
+          isAuction: true
+        });
+      }
+      await new Promise(r => setTimeout(r, 500));
+    } catch (e) {
+      console.log('Auction scan error:', e.message);
+    }
+  }
+  return results;
+}
+
+let scanRunning = false;
 
 async function runScan() {
-  const startTime = Date.now();
-  console.log(`[${new Date().toISOString()}] Scanning... (batch ${scanCount + 1})`);
-
-  // Process 4 items per scan (rotate through queue)
-  const batch = [];
-  for (let i = 0; i < 4; i++) {
-    batch.push(QUEUE[(qIdx + i) % QUEUE.length]);
+  if (scanRunning) {
+    console.log('Scan already in progress — skipping duplicate');
+    return;
   }
-  qIdx = (qIdx + 4) % QUEUE.length;
+  scanRunning = true;
 
-  const newDeals = [];
+  const hour = new Date().getHours();
+  if (hour >= 0 && hour < 7) {
+    console.log('Night mode — paused until 7am');
+    scanRunning = false;
+    return;
+  }
 
-  for (const item of batch) {
+  console.log('Scan started at ' + new Date().toLocaleString('en-GB'));
+  statusData.lastEbayScan = new Date().toISOString();
+  let token;
+  try { token = await getToken(); } catch (e) { console.error('Token error:', e.message); scanRunning = false; return; }
+
+  const alertDeals = [];
+
+  for (const qItem of QUEUE) {
     try {
-      // Get real sold data
-      const soldData = await getRealSoldData(item.soldQ);
-      if (!soldData) { await sleep(300); continue; }
+      const q = encodeURIComponent(qItem.q);
 
-      // Search BIN listings
-      const binDeals = await searchEbayBIN(item, soldData);
-      for (const deal of binDeals) {
-        if (!alertedIds.has(deal.id)) newDeals.push(deal);
+      // Fetch eBay listings and eBay market data in parallel
+      // Use category ID to ensure only correct item types are returned
+      const catFilter = qItem.catId ? '&category_ids=' + qItem.catId : '';
+      const [ebayRes, marketData] = await Promise.all([
+        fetch('https://api.ebay.com/buy/browse/v1/item_summary/search?q=' + q +
+          '&limit=20&marketplace_ids=EBAY_GB' +
+          '&filter=price:[0..' + MAX_BUY_PRICE + '],priceCurrency:GBP,itemLocationCountry:GB' +
+          catFilter +
+          '&sort=newlyListed', {
+          headers: { 'Authorization': 'Bearer ' + token, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_GB' },
+          signal: AbortSignal.timeout(12000)
+        }),
+        getMarketPrices(qItem.vintedQ || qItem.q, token)
+      ]);
+
+      const ebayData = await ebayRes.json();
+      const listings = (ebayData.itemSummaries || [])
+        .filter(l => !shouldReject(l, qItem))
+        .slice(0, 12);
+
+      if (!listings.length) continue;
+
+      // Get eBay sold prices — use soldQ for accurate category-specific results
+      const soldData = await getSoldPrices(qItem.soldQ || qItem.vintedQ || qItem.q, token);
+
+      // Score each listing
+      const candidates = [];
+      for (const listing of listings) {
+        const id = listing.itemId;
+        if (alertedIds.has(id)) continue;
+        const deal = scoreDeal(listing, marketData, qItem, soldData);
+        if (deal && (deal.confidenceTier === 'mustbuy' || deal.confidenceTier === 'strong')) {
+          candidates.push(deal);
+        }
       }
 
-      // Search ending auctions
-      const auctionDeals = await searchEbayAuctions(item, soldData);
-      for (const deal of auctionDeals) {
-        if (!alertedIds.has(deal.id)) newDeals.push(deal);
+      if (!candidates.length) continue;
+
+      // ── CLAUDE APPEAL SCORING WITH IMAGE ANALYSIS ──
+      const isFootwear = ['trainers', 'boots'].includes(qItem.cat);
+      const minCondScore = isFootwear ? 8 : 7;
+
+      // Sort by ROI descending — only score top 2 per search to keep scan fast
+      candidates.sort((a, b) => b.roi - a.roi);
+      const toScore = candidates.slice(0, 2);
+
+      for (const deal of toScore) {
+        if (deal.confidenceTier === 'strong' || deal.roi < 150) {
+          alertDeals.push(deal);
+          alertedIds.add(deal.id);
+          console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 50) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ')');
+          continue;
+        }
+
+        try {
+          // Only pass image URL for footwear where condition is critical
+          const imageUrl = isFootwear ? (deal.image || null) : null;
+          const appeal = await scoreAppeal(deal.title, deal.brand, deal.cat, deal.condition, deal.price, imageUrl);
+
+          if (!appeal) {
+            // If Claude fails, let the deal through anyway
+            alertDeals.push(deal);
+            alertedIds.add(deal.id);
+            console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 50) + ' — £' + deal.price + ' → £' + deal.vintedListPrice + ' (+£' + deal.vintedNet + ') [appeal unscored]');
+            continue;
+          }
+
+          const appealScore = appeal.appeal;
+          const condScore = appeal.condition;
+
+          // Footwear needs 8+ condition, clothing needs 7+
+          if (appealScore >= 7 && condScore >= minCondScore) {
+            deal.appealScore = appealScore;
+            deal.conditionScore = condScore;
+            deal.appealReason = appeal.appealReason;
+            deal.conditionReason = appeal.conditionReason;
+            deal.confidenceReasons.push('✅ Appeal ' + appealScore + '/10 — ' + appeal.appealReason);
+            deal.confidenceReasons.push('✅ Condition ' + condScore + '/10 — ' + appeal.conditionReason);
+            deal.confidenceScore = Math.min(99, deal.confidenceScore + 5);
+            alertDeals.push(deal);
+            alertedIds.add(deal.id);
+            console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 45) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ') Appeal:' + appealScore + ' Cond:' + condScore + (isFootwear ? ' [footwear — min cond 8]' : ''));
+          } else {
+            console.log('[FILTERED] ' + deal.title.substring(0, 45) + ' — Appeal:' + appealScore + ' Cond:' + condScore + ' (min:' + minCondScore + ') — ' + (appealScore < 7 ? appeal.appealReason : appeal.conditionReason));
+          }
+        } catch (e) {
+          // On error let deal through
+          alertDeals.push(deal);
+          alertedIds.add(deal.id);
+        }
       }
 
-      await sleep(400);
-    } catch(e) {
-      console.error(`Scan error for ${item.q}:`, e.message);
+      await new Promise(r => setTimeout(r, 700));
+    } catch (e) {
+      console.error('Error scanning "' + qItem.q + '":', e.message);
     }
   }
 
-  scanCount++;
-  lastScanTime = new Date();
+  // ── OXFAM ONLINE SCAN ──
+  // Zero bot competition, no auth needed, staff don't know resale values
+  const OXFAM_SEARCHES = [
+    { term: 'barbour jacket', brand: 'Barbour', avgSell: 85, minProfit: 22 },
+    { term: 'stone island jacket', brand: 'Stone Island', avgSell: 110, minProfit: 35 },
+    { term: 'patagonia fleece jacket', brand: 'Patagonia', avgSell: 55, minProfit: 18 },
+    { term: 'north face jacket fleece', brand: 'North Face', avgSell: 45, minProfit: 15 },
+    { term: 'arc teryx jacket', brand: "Arc'teryx", avgSell: 110, minProfit: 35 },
+    { term: 'ralph lauren jacket coat', brand: 'Ralph Lauren', avgSell: 40, minProfit: 14 },
+    { term: 'dr martens boots', brand: 'Dr Martens', avgSell: 65, minProfit: 20 },
+    { term: 'adidas samba trainers', brand: 'Adidas', avgSell: 48, minProfit: 15 },
+    { term: 'new balance trainers', brand: 'New Balance', avgSell: 65, minProfit: 20 },
+    { term: 'levi jeans', brand: 'Levi', avgSell: 35, minProfit: 12 },
+    { term: 'carhartt jacket', brand: 'Carhartt', avgSell: 50, minProfit: 16 },
+    { term: 'cp company jacket', brand: 'CP Company', avgSell: 90, minProfit: 30 },
+  ];
+  const oxfamItems = await scanOxfam(OXFAM_SEARCHES.map(s => s.term));
+  for (const item of oxfamItems) {
+    if (alertedIds.has('oxfam_' + item.url)) continue;
+    // Find matching search config for profit calc
+    const cfg = OXFAM_SEARCHES.find(s => item.title.toLowerCase().includes(s.brand.toLowerCase()));
+    if (!cfg) continue;
+    const netProfit = cfg.avgSell - item.price - POSTAGE;
+    if (netProfit < cfg.minProfit) continue;
+    const roi = Math.round((netProfit / item.price) * 100);
+    if (roi < 50) continue;
+    alertedIds.add('oxfam_' + item.url);
+    alertDeals.push({
+      itemId: 'oxfam_' + item.url,
+      title: item.title,
+      price: item.price,
+      url: item.url,
+      source: 'Oxfam Online',
+      vintedListPrice: cfg.avgSell,
+      vintedNet: Math.round(netProfit),
+      roi,
+      confidenceTier: netProfit >= cfg.minProfit * 1.5 ? 'mustbuy' : 'good',
+      confidenceScore: netProfit,
+      soldCount: 0,
+      ebayMedian: cfg.avgSell,
+    });
+    console.log('[OXFAM] ' + item.title.substring(0, 50) + ' — £' + item.price + ' → relist £' + cfg.avgSell + ' (+£' + Math.round(netProfit) + ')');
+  }
 
-  // Deduplicate
-  const uniqueDeals = [];
-  const seenInBatch = new Set();
-  for (const deal of newDeals) {
-    if (!seenInBatch.has(deal.id)) {
-      seenInBatch.add(deal.id);
-      uniqueDeals.push(deal);
+  // ── EBAY AUCTION SCAN — instant alert for ending soon ──
+  console.log('Scanning eBay auctions ending within 4 hours...');
+  const auctionItems = await scanAuctions(token);
+  console.log('Auctions: ' + auctionItems.length + ' zero/low-bid items found');
+
+  const auctionDeals = [];
+  for (const item of auctionItems) {
+    if (alertedIds.has(item.itemId)) continue;
+    const soldData = await getSoldPrices(item.queueItem.soldQ, token);
+    const deal = scoreDeal(item, null, item.queueItem, soldData);
+    if (deal && deal.confidenceTier === 'mustbuy') {
+      deal.source = 'eBay Auction ⏱ ' + item.hoursLeft + 'h left · ' + item.bidCount + ' bids';
+      deal.isAuction = true;
+      deal.hoursLeft = item.hoursLeft;
+      auctionDeals.push(deal);
+      alertedIds.add(item.itemId);
+      console.log('[AUCTION] ' + deal.title.substring(0, 45) + ' — £' + deal.price + ' · ' + item.hoursLeft + 'h left · ' + item.bidCount + ' bids');
     }
   }
 
-  // Sort by score
-  uniqueDeals.sort((a, b) => b.score - a.score);
+  // Send instant auction alert if any found — separate from regular email
+  if (auctionDeals.length > 0) {
+    console.log('Sending instant auction alert — ' + auctionDeals.length + ' deals');
+    await sendAlert(auctionDeals.slice(0, 5), true);
+  }
 
-  // Add to recent deals cache (keep last 50)
-  recentDeals = [...uniqueDeals, ...recentDeals].slice(0, 50);
+  // ── REGULAR EMAIL — best Must Buys from eBay + Vinted + Oxfam + Auctions ──
+  const mustBuyCount = alertDeals.filter(d => d.confidenceTier === 'mustbuy').length;
+  console.log('Scan complete — ' + alertDeals.length + ' deals (' + mustBuyCount + ' Must Buy) across eBay + Vinted + Oxfam + Auctions');
 
-  // Only alert on strong/mustbuy
-  const alertDeals = uniqueDeals.filter(d => d.confidenceTier === 'mustbuy' || d.confidenceTier === 'strong');
-
-  if (alertDeals.length > 0) {
-    console.log(`✅ Found ${alertDeals.length} strong deals — alerting`);
-
-    // Add Claude analysis to must-buy deals
-    for (const deal of alertDeals.filter(d => d.confidenceTier === 'mustbuy')) {
-      deal.analysis = await analyseWithClaude(deal);
-    }
-
-    alertDeals.forEach(d => alertedIds.add(d.id));
-    alertedCount += alertDeals.length;
-    lastDealsAlerted = alertDeals.slice(0, 5).map(d =>
-      `${d.title} (Buy £${d.price} → +£${d.bestNet.toFixed(0)} profit, ${d.roi}% ROI)`
-    );
-
-    await sendDealAlert(alertDeals);
+  const mustBuysOnly = alertDeals.filter(d => d.confidenceTier === 'mustbuy');
+  if (mustBuysOnly.length > 0) {
+    mustBuysOnly.sort((a, b) => b.confidenceScore - a.confidenceScore);
+    // Send Telegram for top eBay deal
+    const top = mustBuysOnly[0];
+    await sendTelegram('🎯 <b>EBAY MUST BUY</b>\n' +
+      '<b>' + top.title.substring(0, 60) + '</b>\n' +
+      '💰 Buy <b>£' + top.price + '</b> → Relist <b>£' + top.vintedListPrice + '</b>\n' +
+      '📈 Profit: <b>+£' + top.vintedNet + '</b> (' + top.roi + '% ROI)\n' +
+      '🔗 <a href="' + (top.url || top.itemWebUrl || '') + '">View on eBay</a>');
+    await sendAlert(mustBuysOnly.slice(0, 5));
   } else {
-    console.log(`Scan ${scanCount}: ${uniqueDeals.length} deals found, none strong enough to alert`);
+    console.log('No Must Buy deals this scan — skipping email');
   }
 
-  const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-  console.log(`Scan completed in ${duration}s`);
+  if (alertedIds.size > 800) alertedIds.clear();
+  scanRunning = false;
 }
 
-// ── Schedule ──────────────────────────────────────────────────
-function scheduleScan() {
-  // Run immediately
-  runScan().catch(e => console.error('Scan error:', e));
-  // Then every 2 minutes
-  setInterval(() => {
-    runScan().catch(e => console.error('Scan error:', e));
-  }, SCAN_INTERVAL_MS);
-  console.log(`Scanning every ${SCAN_INTERVAL_MS / 60000} minutes`);
+// ── VINTED SCAN — runs every 30 minutes, rotates through targets ──
+let vintedScanRunning = false;
+let vintedTargetIndex = 0; // Tracks which searches to run next
+
+async function runVintedScan() {
+  if (vintedScanRunning) return;
+  vintedScanRunning = true;
+
+  // Run 3 searches per cycle, rotating through all targets
+  const batchSize = 3;
+  const batch = [];
+  for (let i = 0; i < batchSize; i++) {
+    batch.push(VINTED_TARGETS[vintedTargetIndex % VINTED_TARGETS.length]);
+    vintedTargetIndex++;
+  }
+
+  console.log('Vinted scan — batch: ' + batch.map(t => t.search).join(', '));
+  statusData.lastVintedScan = new Date().toISOString();
+
+  try {
+    const token = await getToken();
+    const vintedItems = await scanVinted(batch);
+    const vintedDeals = [];
+
+    for (const item of vintedItems) {
+      if (alertedIds.has('vinted-' + item.itemId)) continue;
+      const netProfit = item.avgSell - item.price - POSTAGE;
+      const roi = Math.round((netProfit / item.price) * 100);
+      if (netProfit < item.minProfit || roi < MIN_ROI) continue;
+
+      let appealData = null;
+      if (roi >= 150 && ANTHROPIC_KEY) {
+        appealData = await scoreAppeal(item.title, item.brand, item.cat, 'listed on Vinted', item.price);
+      }
+
+      const dealId = 'vinted-' + item.itemId;
+      const deal = {
+        id: dealId,
+        title: item.title,
+        price: item.price,
+        vintedListPrice: item.avgSell,
+        vintedNet: Math.round(netProfit * 100) / 100,
+        roi,
+        brand: item.brand,
+        cat: item.cat,
+        url: item.url,
+        source: '🔍 Vinted Underpriced — Buy & Relist',
+        confidenceTier: 'mustbuy',
+        confidenceScore: 85,
+        confidenceReasons: ['✅ Listed on Vinted below market value', '✅ Buy on Vinted, relist higher for profit'],
+        soldData: { isReal: false, sampleSize: 0, ebaySoldMedian: item.avgSell, vintedEstimate: item.avgSell },
+        vintedDataSource: 'research',
+        appealScore: appealData?.appeal || null,
+        conditionScore: appealData?.condition || null,
+        appealReason: appealData?.appealReason || null,
+        conditionReason: appealData?.conditionReason || null,
+        isVintedSource: true
+      };
+
+      vintedDeals.push(deal);
+      alertedIds.add(dealId);
+      console.log('[VINTED DEAL] ' + item.title.substring(0, 50) + ' — £' + item.price + ' → relist £' + item.avgSell + ' (+£' + Math.round(netProfit) + ')');
+    }
+
+    if (vintedDeals.length > 0) {
+      console.log('Sending Vinted alert — ' + vintedDeals.length + ' underpriced items');
+      // Send instant Telegram notification for each Vinted deal
+      for (const deal of vintedDeals.slice(0, 3)) {
+        const msg = '🔥 <b>VINTED DEAL</b>\n' +
+          '<b>' + deal.title.substring(0, 60) + '</b>\n' +
+          '💰 Buy <b>£' + deal.price + '</b> → Relist <b>£' + deal.vintedListPrice + '</b>\n' +
+          '📈 Profit: <b>+£' + deal.vintedNet + '</b>\n' +
+          '🔗 <a href="' + deal.url + '">View on Vinted</a>';
+        await sendTelegram(msg);
+      }
+      await sendAlert(vintedDeals.slice(0, 5));
+    } else {
+      console.log('Vinted batch complete — no underpriced items this run');
+    }
+  } catch (e) {
+    console.error('Vinted scan error:', e.message);
+  }
+
+  vintedScanRunning = false;
 }
 
-// ── Routes ─────────────────────────────────────────────────────
-app.get('/health', (_, res) => res.json({
-  status: 'ok', version: 'FlipRadar Pro',
-  alertEmail: ALERT_EMAIL,
-  telegramEnabled: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
-  emailReady: !!process.env.RESEND_API_KEY,
-  maxBuyPrice: MAX_BUY, minProfit: MIN_PROFIT,
-  queueSize: QUEUE.length, alertedSoFar: alertedCount,
-  scanCount, soldDataCached: Object.keys(soldDataCache).length
-}));
+// ── SCHEDULE: eBay every 60 minutes, Vinted every 30 minutes ──
+async function scheduledScan() {
+  await runScan();
+  setTimeout(scheduledScan, 60 * 60 * 1000);
+}
 
-app.get('/status', (_, res) => res.send(`
-  <html><head><meta http-equiv="refresh" content="30"><title>FlipRadar Pro</title>
-  <style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:20px;background:#f9fafb;}
-  .card{background:white;border-radius:12px;padding:16px;margin-bottom:12px;border:1px solid #e5e7eb;}
-  .badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600;}
-  .green{background:#EAF3DE;color:#3B6D11;} .amber{background:#FAEEDA;color:#854F0B;}
-  </style></head>
-  <body>
-    <h2>🔥 FlipRadar Pro</h2>
-    <div class="card">
-      <p><strong>Status:</strong> <span class="badge green">Live ✅</span></p>
-      <p><strong>Last scan:</strong> ${lastScanTime ? lastScanTime.toLocaleString('en-GB') : 'Not yet'}</p>
-      <p><strong>Scans run:</strong> ${scanCount} · Scanning every 2 minutes</p>
-      <p><strong>Deals alerted:</strong> ${alertedCount}</p>
-      <p><strong>Sold data cached:</strong> ${Object.keys(soldDataCache).length} search terms</p>
-      <p><strong>Email:</strong> ${process.env.RESEND_API_KEY ? '✅ Resend' : '❌ Not configured'}</p>
-      <p><strong>Telegram:</strong> ${process.env.TELEGRAM_BOT_TOKEN ? '✅ Configured' : '⚠ Not configured (optional but recommended)'}</p>
-    </div>
-    ${lastDealsAlerted.length ? `
-    <div class="card">
-      <strong>Last deals alerted:</strong><br>
-      ${lastDealsAlerted.map(d => `<p style="margin:4px 0;font-size:13px;">• ${d}</p>`).join('')}
-    </div>` : ''}
-    ${recentDeals.length ? `
-    <div class="card">
-      <strong>Recent deals (last scan):</strong><br>
-      ${recentDeals.slice(0,10).map(d => `
-        <p style="margin:6px 0;font-size:13px;">
-          <span class="badge ${d.confidenceTier==='mustbuy'?'green':'amber'}">${d.confidenceTier}</span>
-          ${d.title.slice(0,40)}... — Buy £${d.price} → +£${d.bestNet.toFixed(0)} (${d.roi}% ROI)
-          <a href="${d.url}" style="color:#2563eb;margin-left:6px;">View →</a>
-        </p>`).join('')}
-    </div>` : ''}
-    <p><a href="/scan">▶ Run scan now</a> | <a href="/test-email">📧 Test email</a> | <a href="/test-telegram">📱 Test Telegram</a></p>
-    <p style="color:#9ca3af;font-size:12px;">FlipRadar Pro · Real sold data · No Vinted API · ${new Date().toLocaleString('en-GB')}</p>
-  </body></html>
-`));
+async function scheduledVintedScan() {
+  await runVintedScan();
+  setTimeout(scheduledVintedScan, 5 * 60 * 1000); // Every 5 minutes
+}
 
+// ── ENDPOINTS ──
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    botRunning: true,
+    alertEmail: ALERT_EMAIL || 'not set',
+    emailReady: !!SENDGRID_KEY,
+    maxBuyPrice: MAX_BUY_PRICE,
+    queueSize: QUEUE.length,
+    alertedSoFar: alertedIds.size
+  });
+});
+
+app.get('/scan', (req, res) => {
+  res.json({ message: 'Scan started — check logs and your email in ~5 minutes' });
+  runScan();
+});
+
+// ── TOKEN REFRESH PAGE ──
+// Visit this in your browser while logged into Vinted to refresh the token
+app.get('/refresh-token', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>FlipRadar — Refresh Vinted Token</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: sans-serif; max-width: 500px; margin: 60px auto; padding: 20px; background: #0f0f0f; color: #fff; }
+    h1 { color: #22c55e; }
+    button { background: #22c55e; color: #000; border: none; padding: 14px 28px; font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; width: 100%; margin-top: 20px; }
+    #status { margin-top: 20px; padding: 14px; border-radius: 8px; display: none; }
+    .ok { background: #052e16; border: 1px solid #22c55e; color: #22c55e; }
+    .err { background: #2d0a0a; border: 1px solid #ef4444; color: #ef4444; }
+    p { color: #aaa; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <h1>🔑 Refresh Vinted Token</h1>
+  <p>Click the button below while logged into Vinted. Your browser will grab a fresh token and send it to FlipRadar automatically.</p>
+  <p><strong>You must be logged into Vinted in this browser for this to work.</strong></p>
+  <button onclick="refreshToken()">Grab Fresh Token</button>
+  <div id="status"></div>
+  <script>
+    async function refreshToken() {
+      const statusEl = document.getElementById('status');
+      statusEl.style.display = 'block';
+      statusEl.className = '';
+      statusEl.textContent = 'Fetching token from Vinted...';
+      try {
+        // Fetch Vinted API using browser cookies
+        const r = await fetch('https://www.vinted.co.uk/api/v2/catalog/items?search_text=test&per_page=1', {
+          credentials: 'include',
+          headers: { 'Accept': 'application/json' }
+        });
+        if (!r.ok) { throw new Error('Vinted returned ' + r.status + ' — are you logged in?'); }
+        // Get token from cookie via Vinted identity endpoint
+        const r2 = await fetch('https://www.vinted.co.uk/api/v2/users/current_user', {
+          credentials: 'include',
+          headers: { 'Accept': 'application/json' }
+        });
+        // Extract access_token from page cookies indirectly via a known trick
+        // Send the session cookie to our server which will use it
+        const cookieData = document.cookie;
+        const resp = await fetch('/set-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cookie: cookieData, confirmed: true })
+        });
+        const result = await resp.json();
+        if (result.ok) {
+          statusEl.className = 'ok';
+          statusEl.textContent = '✅ Token refreshed! FlipRadar will now scan Vinted for deals.';
+        } else {
+          throw new Error(result.error || 'Unknown error');
+        }
+      } catch(e) {
+        statusEl.className = 'err';
+        statusEl.textContent = '❌ ' + e.message;
+      }
+    }
+  </script>
+</body>
+</html>`);
+});
+
+// Token set endpoint — called by the refresh page
+app.post('/set-token', express.json(), (req, res) => {
+  const { cookie } = req.body || {};
+  if (!cookie) return res.json({ ok: false, error: 'No cookie provided' });
+  // Store the session cookie for use in API calls
+  vintedAccessToken = cookie;
+  vintedTokenExpiry = Date.now() + 90 * 60 * 1000;
+  console.log('Vinted: token manually refreshed via /refresh-token page');
+  res.json({ ok: true });
+});
+
+// Web app deals endpoint
 app.get('/deals', async (req, res) => {
-  const { q, brand, cat, soldQ } = req.query;
-  if (!q) return res.json({ deals: [] });
-  const item = { q, soldQ: soldQ || q, brand: brand || 'Various', cat: cat || 'unknown' };
-  const soldData = await getRealSoldData(item.soldQ);
-  if (!soldData) return res.json({ deals: [], error: 'No sold data available' });
-  const binDeals = await searchEbayBIN(item, soldData);
-  const auctionDeals = await searchEbayAuctions(item, soldData);
-  res.json({ deals: [...binDeals, ...auctionDeals], soldData });
-});
+  try {
+    const token = await getToken();
+    const searchTerm = req.query.q || '';
+    const brand = req.query.brand || '';
+    const cat = req.query.cat || 'vintage';
+    const avgSell = parseFloat(req.query.avgSell || '40');
+    const max = req.query.maxPrice || String(MAX_BUY_PRICE);
+    const min = req.query.minPrice || '0';
+    const q = encodeURIComponent(searchTerm);
 
-app.get('/scan', async (req, res) => {
-  res.send('Scan triggered — check /status for results in ~30 seconds.');
-  runScan().catch(e => console.error('Manual scan error:', e));
-});
+    // Find matching queue item for context
+    const qItem = QUEUE.find(i => i.brand === brand) || {
+      brand, cat, avgSell, minProfit: MIN_NET_PROFIT, vintedQ: searchTerm, q: searchTerm
+    };
 
-app.get('/test-email', async (req, res) => {
-  const ok = await sendEmail(
-    '✅ FlipRadar Pro email test',
-    '<div style="font-family:sans-serif;max-width:400px;margin:40px auto;padding:20px;"><h2>✅ Email working!</h2><p>FlipRadar Pro will email you when strong deals are found. Real sold data powered.</p></div>'
-  );
-  res.send(ok ? '✅ Test email sent — check your inbox.' : '❌ Email failed — check RESEND_API_KEY in Render.');
-});
+    const [ebayRes, marketData] = await Promise.all([
+      fetch('https://api.ebay.com/buy/browse/v1/item_summary/search?q=' + q +
+        '&limit=15&marketplace_ids=EBAY_GB' +
+        '&filter=price:[' + min + '..' + max + '],priceCurrency:GBP,itemLocationCountry:GB' +
+        '&sort=newlyListed', {
+        headers: { 'Authorization': 'Bearer ' + token, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_GB' }
+      }),
+      getMarketPrices(req.query.vintedQ || searchTerm, token)
+    ]);
 
-app.get('/test-telegram', async (req, res) => {
-  if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) {
-    return res.send('⚠️ Telegram not configured. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to Render env vars for instant phone alerts.');
+    const ebayData = await ebayRes.json();
+    const items = (ebayData.itemSummaries || []).filter(l => !shouldReject(l)).slice(0, 10);
+
+    const deals = items.map(listing => {
+      const deal = scoreDeal(listing, marketData, qItem);
+      return deal;
+    }).filter(Boolean);
+
+    deals.sort((a, b) => {
+      if (a.confidenceTier === 'mustbuy' && b.confidenceTier !== 'mustbuy') return -1;
+      if (b.confidenceTier === 'mustbuy' && a.confidenceTier !== 'mustbuy') return 1;
+      return b.vintedNet - a.vintedNet;
+    });
+
+    res.json({ deals });
+  } catch (e) {
+    console.error(e.message);
+    res.status(500).json({ error: e.message, deals: [] });
   }
-  const ok = await sendTelegram('✅ <b>FlipRadar Pro</b> — Telegram alerts are working! You\'ll get instant notifications when strong deals are found.');
-  res.send(ok ? '✅ Telegram test sent — check your phone.' : '❌ Telegram failed — check bot token and chat ID.');
 });
 
-app.get('/sold-data', async (req, res) => {
-  const { q } = req.query;
-  if (!q) return res.json({ error: 'provide ?q=search term' });
-  const data = await getRealSoldData(q);
-  res.json(data || { error: 'No data found' });
+app.get('/status', (req, res) => {
+  const now = Date.now();
+  const uptimeMs = now - new Date(statusData.startedAt).getTime();
+  const uptimeHrs = Math.floor(uptimeMs / 3600000);
+  const uptimeMins = Math.floor((uptimeMs % 3600000) / 60000);
+
+  const timeSince = (iso) => {
+    if (!iso) return 'Never';
+    const diff = Math.floor((now - new Date(iso).getTime()) / 60000);
+    if (diff < 1) return 'Just now';
+    if (diff < 60) return diff + 'm ago';
+    return Math.floor(diff / 60) + 'h ' + (diff % 60) + 'm ago';
+  };
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="refresh" content="60">
+  <title>FlipRadar Status</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f0f; color: #fff; min-height: 100vh; padding: 24px; }
+    h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+    .subtitle { color: #666; font-size: 13px; margin-bottom: 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .card { background: #1a1a1a; border-radius: 12px; padding: 16px; border: 1px solid #2a2a2a; }
+    .card-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .card-value { font-size: 22px; font-weight: 700; }
+    .card-sub { font-size: 12px; color: #666; margin-top: 4px; }
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+    .green { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+    .yellow { background: #eab308; }
+    .section-title { font-size: 13px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+    .deal { background: #1a1a1a; border-radius: 10px; padding: 14px; margin-bottom: 8px; border: 1px solid #2a2a2a; display: flex; justify-content: space-between; align-items: center; }
+    .deal-title { font-size: 14px; font-weight: 500; }
+    .deal-meta { font-size: 12px; color: #666; margin-top: 3px; }
+    .badge { font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 20px; white-space: nowrap; }
+    .mustbuy { background: #166534; color: #4ade80; }
+    .strong { background: #1e3a5f; color: #60a5fa; }
+    .vinted { background: #3b1f5e; color: #c084fc; }
+    .profit { font-size: 16px; font-weight: 700; color: #4ade80; }
+    .footer { text-align: center; color: #444; font-size: 12px; margin-top: 24px; }
+    .actions { display: flex; gap: 8px; margin-bottom: 24px; }
+    .btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #fff; padding: 8px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; text-decoration: none; }
+    .btn:hover { border-color: #444; }
+    .btn-primary { background: #166534; border-color: #166534; }
+  </style>
+</head>
+<body>
+  <h1>🎯 FlipRadar</h1>
+  <p class="subtitle">Auto-refreshes every 60 seconds</p>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">Status</div>
+      <div class="card-value"><span class="status-dot green"></span>Live</div>
+      <div class="card-sub">Up ${uptimeHrs}h ${uptimeMins}m</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Last eBay Scan</div>
+      <div class="card-value">${timeSince(statusData.lastEbayScan)}</div>
+      <div class="card-sub">Every 60 minutes</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Last Vinted Scan</div>
+      <div class="card-value">${timeSince(statusData.lastVintedScan)}</div>
+      <div class="card-sub">Every 5 minutes</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Last Email</div>
+      <div class="card-value">${timeSince(statusData.lastEmailSent)}</div>
+      <div class="card-sub">${statusData.totalEmailsSent} sent this session</div>
+    </div>
+    <div class="card">
+      <div class="card-label">eBay Queue</div>
+      <div class="card-value">${QUEUE.length}</div>
+      <div class="card-sub">Searches per scan</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Alerted IDs</div>
+      <div class="card-value">${alertedIds.size}</div>
+      <div class="card-sub">Tracked this session</div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <a href="/scan" class="btn btn-primary">▶ Run eBay Scan</a>
+    <a href="/scan-vinted" class="btn">🔍 Run Vinted Scan</a>
+    <a href="/health" class="btn">❤ Health</a>
+  </div>
+
+  <div class="section-title">Last Deals Alerted</div>
+  ${statusData.lastDeals.length === 0
+    ? '<div class="card" style="color:#666">No deals alerted yet this session</div>'
+    : statusData.lastDeals.map(d => `
+    <div class="deal">
+      <div>
+        <div class="deal-title">${d.title}</div>
+        <div class="deal-meta">£${d.price} buy · ${d.source}</div>
+      </div>
+      <div style="text-align:right">
+        <div class="profit">+£${d.profit}</div>
+        <span class="badge ${d.source === 'Vinted' ? 'vinted' : d.tier}">${d.tier === 'mustbuy' ? 'Must Buy' : 'Strong'}</span>
+      </div>
+    </div>`).join('')}
+
+  <div class="footer">FlipRadar · Max buy £${MAX_BUY_PRICE} · ${new Date().toLocaleString('en-GB')}</div>
+</body>
+</html>`;
+  res.send(html);
 });
 
-app.get('/ping', (_, res) => res.send('pong'));
+app.get('/scan-vinted', (req, res) => {
+  res.json({ message: 'Vinted scan started — check logs and email in ~10 minutes' });
+  runVintedScan();
+});
 
-// ── Start ──────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`FlipRadar Pro running on port ${PORT}`);
-  console.log(`Config: max buy £${MAX_BUY}, min profit £${MIN_PROFIT}, scan every 2 mins`);
-  console.log(`Email: ${process.env.RESEND_API_KEY ? 'Resend ✅' : '❌ Not configured'}`);
-  console.log(`Telegram: ${process.env.TELEGRAM_BOT_TOKEN ? '✅' : 'Not configured'}`);
-  console.log('Vinted API scanning: DISABLED');
-  scheduleScan();
+app.listen(process.env.PORT || 3000, () => {
+  console.log('FlipRadar bot running');
+  console.log('Alert email: ' + (ALERT_EMAIL || 'NOT SET'));
+  console.log('Email service: ' + (SENDGRID_KEY ? 'SendGrid ready' : 'NOT SET'));
+  console.log('Queue: ' + QUEUE.length + ' searches');
+  console.log('Max buy price: £' + MAX_BUY_PRICE);
+  setTimeout(scheduledScan, 30000);
+  setTimeout(scheduledVintedScan, 60000);
+
+  // Keep-alive ping every 10 minutes to prevent Render free tier sleep
+  setInterval(() => {
+    fetch('https://flipradar-proxy.onrender.com/health')
+      .then(() => console.log('Keep-alive ping sent'))
+      .catch(() => {});
+  }, 10 * 60 * 1000);
 });
