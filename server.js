@@ -60,18 +60,30 @@ async function getRealSoldData(query) {
   }
 
   try {
-    const encodedQuery = encodeURIComponent(query);
-    const url = `https://www.ebay.co.uk/sch/i.html?_nkw=${encodedQuery}&LH_Complete=1&LH_Sold=1&LH_ItemCondition=3000&_ipg=60&_sop=13`;
-    const html = await fetchUrl(url);
+    // Use eBay Finding API findCompletedItems — no scraping, no bot detection
+    const params = new URLSearchParams({
+      'OPERATION-NAME': 'findCompletedItems',
+      'SERVICE-VERSION': '1.13.0',
+      'SECURITY-APPNAME': process.env.EBAY_APP_ID,
+      'RESPONSE-DATA-FORMAT': 'JSON',
+      'keywords': query,
+      'paginationInput.entriesPerPage': '50',
+      'itemFilter(0).name': 'SoldItemsOnly',
+      'itemFilter(0).value': 'true',
+      'itemFilter(1).name': 'Condition',
+      'itemFilter(1).value': 'Used',
+      'itemFilter(2).name': 'LocatedIn',
+      'itemFilter(2).value': 'GB',
+      'sortOrder': 'EndTimeSoonest'
+    });
 
-    // Extract sold prices from HTML
-    const priceMatches = html.match(/class="s-item__price"[^>]*>[\s\S]*?£([\d,]+\.?\d*)/g) || [];
-    const prices = [];
+    const data = await fetchUrl(`https://svcs.ebay.com/services/search/FindingService/v1?${params}`);
+    const parsed = JSON.parse(data);
+    const items = parsed?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
 
-    for (const match of priceMatches) {
-      const num = parseFloat(match.replace(/[^0-9.]/g, ''));
-      if (num >= 3 && num <= 500) prices.push(num);
-    }
+    const prices = items
+      .map(i => parseFloat(i.sellingStatus?.[0]?.currentPrice?.[0]?.['__value__'] || '0'))
+      .filter(p => p >= 3 && p <= 500);
 
     if (prices.length < 3) {
       soldDataCache[cacheKey] = { timestamp: now, data: null };
@@ -79,18 +91,15 @@ async function getRealSoldData(query) {
     }
 
     prices.sort((a, b) => a - b);
-    // Remove outliers (top and bottom 10%)
     const trimStart = Math.floor(prices.length * 0.1);
     const trimEnd = Math.ceil(prices.length * 0.9);
     const trimmed = prices.slice(trimStart, trimEnd);
     const median = trimmed[Math.floor(trimmed.length / 2)];
-    const low = trimmed[0];
-    const high = trimmed[trimmed.length - 1];
 
     const data = {
       median: Math.round(median * 100) / 100,
-      low: Math.round(low * 100) / 100,
-      high: Math.round(high * 100) / 100,
+      low: Math.round(trimmed[0] * 100) / 100,
+      high: Math.round(trimmed[trimmed.length - 1] * 100) / 100,
       sampleSize: prices.length,
       trimmedSize: trimmed.length
     };
