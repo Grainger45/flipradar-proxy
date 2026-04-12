@@ -961,26 +961,34 @@ async function getVintedToken() {
     const cookies = r1.headers.get('set-cookie') || '';
     const cookieStr = cookies.split(',').map(c => c.split(';')[0].trim()).join('; ');
 
-    // Login
-    const r2 = await fetch('https://www.vinted.co.uk/api/v2/sessions', {
+    // Login using OAuth password grant
+    const r2 = await fetch('https://www.vinted.co.uk/oauth/token', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
         'Accept': 'application/json',
         'Cookie': cookieStr,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
-      body: JSON.stringify({ login: username, password, scope: 'user' })
+      body: new URLSearchParams({
+        grant_type: 'password',
+        username: username,
+        password: password,
+        client_id: 'web',
+        scope: 'user'
+      }).toString()
     });
 
     if (r2.ok) {
       const data = await r2.json();
-      if (data.access_token) {
-        vintedAccessToken = data.access_token;
+      const token = data.access_token || data.token;
+      if (token) {
+        vintedAccessToken = token;
         vintedTokenExpiry = Date.now() + 90 * 60 * 1000;
         console.log('Vinted: token auto-refreshed successfully');
         return vintedAccessToken;
       }
+      console.log('Vinted: login ok but no token in response:', Object.keys(data).join(', '));
     }
     console.log('Vinted: auto-refresh failed, status:', r2.status);
   } catch(e) {
