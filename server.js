@@ -16,6 +16,27 @@ const CLIENT_ID = process.env.EBAY_CLIENT_ID;
 const CLIENT_SECRET = process.env.EBAY_CLIENT_SECRET;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const SENDGRID_KEY = process.env.SENDGRID_API_KEY;
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
+// ── TELEGRAM NOTIFICATIONS ──
+async function sendTelegram(message) {
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
+  try {
+    await fetch('https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/sendMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text: message,
+        parse_mode: 'HTML',
+        disable_web_page_preview: false
+      })
+    });
+  } catch (e) {
+    console.log('Telegram error:', e.message);
+  }
+}
 const ALERT_EMAIL = process.env.ALERT_EMAIL;
 const POSTAGE = 3.50;
 const MIN_NET_PROFIT = 15;
@@ -206,7 +227,12 @@ const REJECT_KIDS_SIZES = [
   '8 years','9 years','10 years','11 years','12 years',
   '14/16','14-16',' age 14',' age 16',
   'kids size','childrens size','childs size',
-  'junior size','boys size','girls size'
+  'junior size','boys size','girls size',
+  'toddler','infant','baby size',
+  ' age 1 ',' age 2 ',' age 3 ',' age 4 ',' age 5 ',' age 6 ',' age 7 ',
+  '1-2 years','2-3 years','3-4 years','4-5 years','5-6 years','6-7 years',
+  'age 18 months','12 months','18 months','24 months',
+  'kids boots','kids shoes','kids trainers','boys boots','girls boots'
 ];
 
 let cachedToken = null;
@@ -827,18 +853,31 @@ async function scanOxfam(searchTerms) {
 // Uses Vinted's internal API directly — same approach as VintedSeekers, Souk etc
 // Cookie factory: get session cookie once, use for all API calls = instant responses
 const VINTED_TARGETS = [
+  // Outerwear — proven sellers
   { search: 'Patagonia fleece jacket', brand: 'Patagonia', avgSell: 55, minProfit: 18, cat: 'outerwear' },
   { search: 'North Face fleece jacket', brand: 'North Face', avgSell: 45, minProfit: 15, cat: 'outerwear' },
   { search: 'Barbour wax jacket', brand: 'Barbour', avgSell: 70, minProfit: 22, cat: 'outerwear' },
   { search: 'Stone Island jacket', brand: 'Stone Island', avgSell: 110, minProfit: 35, cat: 'outerwear' },
-  { search: 'Adidas Samba trainers', brand: 'Adidas', avgSell: 48, minProfit: 15, cat: 'trainers' },
-  { search: 'Dr Martens boots', brand: 'Dr Martens', avgSell: 60, minProfit: 20, cat: 'boots' },
-  { search: 'Nike vintage hoodie', brand: 'Nike', avgSell: 38, minProfit: 12, cat: 'nike' },
   { search: "Arc'teryx jacket", brand: "Arc'teryx", avgSell: 110, minProfit: 35, cat: 'gorpcore' },
   { search: 'Patagonia down jacket', brand: 'Patagonia', avgSell: 80, minProfit: 25, cat: 'outerwear' },
   { search: 'Carhartt WIP jacket', brand: 'Carhartt WIP', avgSell: 50, minProfit: 16, cat: 'outerwear' },
+  // Trainers — 61% sell-through rate, New Balance leads
+  { search: 'Adidas Samba trainers', brand: 'Adidas', avgSell: 48, minProfit: 15, cat: 'trainers' },
+  { search: 'New Balance 550 trainers', brand: 'New Balance', avgSell: 65, minProfit: 20, cat: 'trainers' },
+  { search: 'New Balance 990 trainers', brand: 'New Balance', avgSell: 80, minProfit: 25, cat: 'trainers' },
   { search: 'Salomon trainers', brand: 'Salomon', avgSell: 70, minProfit: 22, cat: 'trainers' },
   { search: 'Veja trainers', brand: 'Veja', avgSell: 60, minProfit: 18, cat: 'trainers' },
+  { search: 'Dr Martens boots', brand: 'Dr Martens', avgSell: 60, minProfit: 20, cat: 'boots' },
+  // Nike vintage — strong demand
+  { search: 'Nike vintage hoodie', brand: 'Nike', avgSell: 38, minProfit: 12, cat: 'nike' },
+  { search: 'Nike ACG jacket', brand: 'Nike', avgSell: 65, minProfit: 20, cat: 'nike' },
+  // Football shirts — massive UK→US arbitrage opportunity, £10-30 → $60-200
+  { search: 'England football shirt 1990s vintage', brand: 'England', avgSell: 65, minProfit: 22, cat: 'football' },
+  { search: 'Manchester United football shirt vintage', brand: 'Manchester United', avgSell: 55, minProfit: 18, cat: 'football' },
+  { search: 'Liverpool football shirt vintage', brand: 'Liverpool', avgSell: 55, minProfit: 18, cat: 'football' },
+  { search: 'Umbro football shirt vintage 90s', brand: 'Umbro', avgSell: 45, minProfit: 15, cat: 'football' },
+  // CP Company — strong resale
+  { search: 'CP Company jacket', brand: 'CP Company', avgSell: 90, minProfit: 30, cat: 'outerwear' },
 ];
 
 // Track last seen item IDs per search to only process new listings
@@ -902,25 +941,37 @@ async function scanVinted(targets) {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'Accept-Language': 'en-GB,en;q=0.9',
-          'Cookie': cookie,
+          'Cookie': '_vinted_fr_session=' + (process.env.VINTED_SESSION || '') + '; ' + (cookie || ''),
         },
         signal: AbortSignal.timeout(15000)
       });
 
       if (!r.ok) { console.log('Vinted HTTP ' + r.status + ' for: ' + target.search); continue; }
       const html = await r.text();
+      console.log('[VINTED] "' + target.search + '" html:' + html.length + 'chars');
 
-      // Extract items from embedded JSON in script tags
-      // Vinted embeds item data as JSON in the page
       const items = [];
       const lastSeen = vintedLastSeen.get(target.search) || new Set();
       const newLastSeen = new Set();
 
-      // Vinted embeds item data in escaped JSON: {id},\"title\":\"...\",\"price\":{\"amount\":\"26.0\"
-      // Extract id+price pairs directly from this structure
-      const itemMatches = [...html.matchAll(/(\d{8,12}),\\"title\\":\\"([^\\]+)\\",\\"price\\":\{\\"amount\\":\\"([\d.]+)\\"/g)];
-
-      console.log('[VINTED] "' + target.search + '" — found ' + itemMatches.length + ' raw items in HTML');
+      // Try multiple patterns to handle Vinted HTML format variations
+      let itemMatches = [];
+      // Pattern 1: double-escaped JSON (most common server-side)
+      itemMatches = [...html.matchAll(/(\d{8,12}),\\"title\\":\\"([^\\]+)\\",\\"price\\":\{\\"amount\\":\\"([\d.]+)\\"/g)];
+      // Pattern 2: single-escaped JSON
+      if (itemMatches.length === 0) {
+        itemMatches = [...html.matchAll(/(\d{8,12}),"title":"([^"]+)","price":{"amount":"([\d.]+)"/g)];
+      }
+      // Pattern 3: URL slug + nearby price fallback
+      if (itemMatches.length === 0) {
+        const urlMs = [...html.matchAll(/\/items\/(\d{8,12})-([^"?\\&\s]+)/g)];
+        const priceMs = [...html.matchAll(/amount[^"]*"([\d.]+)"/g)];
+        for (const um of urlMs.slice(0, 30)) {
+          const near = priceMs.find(pm => Math.abs(pm.index - um.index) < 2000);
+          if (near) itemMatches.push({1: um[1], 2: um[2].replace(/-/g,' '), 3: near[1], index: um.index});
+        }
+      }
+      console.log('[VINTED] "' + target.search + '" found ' + itemMatches.length + ' raw items');
 
       const seen = new Set();
 
@@ -1206,6 +1257,13 @@ async function runScan() {
   const mustBuysOnly = alertDeals.filter(d => d.confidenceTier === 'mustbuy');
   if (mustBuysOnly.length > 0) {
     mustBuysOnly.sort((a, b) => b.confidenceScore - a.confidenceScore);
+    // Send Telegram for top eBay deal
+    const top = mustBuysOnly[0];
+    await sendTelegram('🎯 <b>EBAY MUST BUY</b>\n' +
+      '<b>' + top.title.substring(0, 60) + '</b>\n' +
+      '💰 Buy <b>£' + top.price + '</b> → Relist <b>£' + top.vintedListPrice + '</b>\n' +
+      '📈 Profit: <b>+£' + top.vintedNet + '</b> (' + top.roi + '% ROI)\n' +
+      '🔗 <a href="' + (top.url || top.itemWebUrl || '') + '">View on eBay</a>');
     await sendAlert(mustBuysOnly.slice(0, 5));
   } else {
     console.log('No Must Buy deals this scan — skipping email');
@@ -1281,6 +1339,15 @@ async function runVintedScan() {
 
     if (vintedDeals.length > 0) {
       console.log('Sending Vinted alert — ' + vintedDeals.length + ' underpriced items');
+      // Send instant Telegram notification for each Vinted deal
+      for (const deal of vintedDeals.slice(0, 3)) {
+        const msg = '🔥 <b>VINTED DEAL</b>\n' +
+          '<b>' + deal.title.substring(0, 60) + '</b>\n' +
+          '💰 Buy <b>£' + deal.price + '</b> → Relist <b>£' + deal.vintedListPrice + '</b>\n' +
+          '📈 Profit: <b>+£' + deal.vintedNet + '</b>\n' +
+          '🔗 <a href="' + deal.url + '">View on Vinted</a>';
+        await sendTelegram(msg);
+      }
       await sendAlert(vintedDeals.slice(0, 5));
     } else {
       console.log('Vinted batch complete — no underpriced items this run');
