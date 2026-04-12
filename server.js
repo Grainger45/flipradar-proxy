@@ -414,12 +414,12 @@ async function scoreAppeal(title, brand, cat, condition, price, imageUrl) {
   const minCondition = isFootwear ? 8 : 7;
 
   try {
-    const prompt = `You are an expert UK Vinted reseller. Be RUTHLESS — most items are not worth buying.
+    const prompt = `You are a professional UK reseller who has bought and sold 10,000+ items. You lose money on bad purchases. Be BRUTALLY strict — 80% of items should fail.
 
 Item: "${title}"
 Brand: ${brand}
 Category: ${cat}
-Condition stated: ${condition || 'not specified'}
+Condition stated: ${condition || 'not specified'}${condition && condition.toLowerCase().includes('very good') ? ' (NOTE: charity shop Very Good = equivalent to Used/Acceptable on eBay — NOT excellent)' : ''}${condition && condition.toLowerCase().includes('good') && !condition.toLowerCase().includes('very good') ? ' (NOTE: charity shop Good = well worn, likely visible marks)' : ''}
 Buy price: £${price}
 ${isFootwear ? 'FOOTWEAR RULE: Condition must be 8+ — sole wear, creasing and yellowing kill resale value.' : ''}
 
@@ -429,7 +429,7 @@ APPEAL (1-10): Would this sell well on Vinted UK within 2 weeks?
 - Score 8-10: Core desirable items (black Sambas, white AF1s, popular colourways, common sizes M/L/UK7-9)
 - Score 6-7: Decent but not exceptional
 - Score 1-5: Hard to sell (unusual colourways, small sizes 1-5 in footwear, niche styles, kids items, accessories)
-INSTANTLY SCORE 1 if: laces, socks, charms, accessories, kids sizes, size 1/2/3 footwear
+INSTANTLY SCORE 1 if: laces, socks, charms, accessories, kids sizes, size 1/2/3 footwear, replacement parts, spare parts, damaged, broken zip, toddler, infant, bundle of
 
 CONDITION (1-10):
 ${isFootwear ? `FOOTWEAR SCORING (strict):
@@ -821,7 +821,7 @@ async function scanOxfam(searchTerms) {
       const productsUrl = 'https://onlineshop.oxfam.org.uk/ccstoreui/v1/products?' +
         'storePriceListGroupId=ukPriceGroup' +
         '&productIds=' + ids.join('%2C') +
-        '&fields=id,displayName,listPrice,route';
+        '&fields=id,displayName,listPrice,route,primaryThumbImageURL,x_condition,x_size';
 
       const r2 = await fetch(productsUrl, {
         headers: { 'Accept': 'application/json' },
@@ -842,12 +842,22 @@ async function scanOxfam(searchTerms) {
         if (REJECT_KIDS_SIZES.some(s => titleLow.includes(s))) continue;
         if (['toddler','infant','childrens','children\'s','boys ','girls '].some(w => titleLow.includes(w))) continue;
 
+        // Build image URL from Oxfam's image CDN pattern
+        const imageUrl = p.primaryThumbImageURL
+          ? 'https://onlineshop.oxfam.org.uk' + p.primaryThumbImageURL.replace('/thumb/', '/large/')
+          : null;
+        const condition = p.x_condition || '';
+        const size = p.x_size || '';
+
         results.push({
           title: title.substring(0, 80),
           price,
           url: 'https://onlineshop.oxfam.org.uk' + (p.route || ''),
           source: 'Oxfam Online',
-          searchTerm: term
+          searchTerm: term,
+          image: imageUrl,
+          condition,
+          size
         });
       }
 
@@ -1190,39 +1200,31 @@ async function runScan() {
 
       if (!candidates.length) continue;
 
-      // ── CLAUDE APPEAL SCORING WITH IMAGE ANALYSIS ──
+      // ── CLAUDE SCORING — runs on EVERY candidate, no bypasses ──
+      // Every deal from every source must pass Claude appeal + condition check
       const isFootwear = ['trainers', 'boots'].includes(qItem.cat);
       const minCondScore = isFootwear ? 8 : 7;
 
-      // Sort by ROI descending — only score top 2 per search to keep scan fast
       candidates.sort((a, b) => b.roi - a.roi);
-      const toScore = candidates.slice(0, 2);
+      const toScore = candidates.slice(0, 3);
 
       for (const deal of toScore) {
-        if (deal.confidenceTier === 'strong' || deal.roi < 150) {
-          alertDeals.push(deal);
-          alertedIds.add(deal.id);
-          console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 50) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ')');
-          continue;
-        }
-
         try {
-          // Only pass image URL for footwear where condition is critical
-          const imageUrl = isFootwear ? (deal.image || null) : null;
+          // Always pass image — vision catches what titles miss
+          const imageUrl = deal.image || null;
           const appeal = await scoreAppeal(deal.title, deal.brand, deal.cat, deal.condition, deal.price, imageUrl);
 
           if (!appeal) {
-            // If Claude fails, let the deal through anyway
+            // Claude unavailable — let through but flag it
             alertDeals.push(deal);
             alertedIds.add(deal.id);
-            console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 50) + ' — £' + deal.price + ' → £' + deal.vintedListPrice + ' (+£' + deal.vintedNet + ') [appeal unscored]');
+            console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 50) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ') [unscored]');
             continue;
           }
 
           const appealScore = appeal.appeal;
           const condScore = appeal.condition;
 
-          // Footwear needs 8+ condition, clothing needs 7+
           if (appealScore >= 7 && condScore >= minCondScore) {
             deal.appealScore = appealScore;
             deal.conditionScore = condScore;
@@ -1231,14 +1233,17 @@ async function runScan() {
             deal.confidenceReasons.push('✅ Appeal ' + appealScore + '/10 — ' + appeal.appealReason);
             deal.confidenceReasons.push('✅ Condition ' + condScore + '/10 — ' + appeal.conditionReason);
             deal.confidenceScore = Math.min(99, deal.confidenceScore + 5);
+            // Upgrade strong→mustbuy if Claude rates it highly
+            if (deal.confidenceTier === 'strong' && appealScore >= 8 && condScore >= 8) {
+              deal.confidenceTier = 'mustbuy';
+            }
             alertDeals.push(deal);
             alertedIds.add(deal.id);
-            console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 45) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ') Appeal:' + appealScore + ' Cond:' + condScore + (isFootwear ? ' [footwear — min cond 8]' : ''));
+            console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 45) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ') A:' + appealScore + ' C:' + condScore);
           } else {
             console.log('[FILTERED] ' + deal.title.substring(0, 45) + ' — Appeal:' + appealScore + ' Cond:' + condScore + ' (min:' + minCondScore + ') — ' + (appealScore < 7 ? appeal.appealReason : appeal.conditionReason));
           }
         } catch (e) {
-          // On error let deal through
           alertDeals.push(deal);
           alertedIds.add(deal.id);
         }
@@ -1251,49 +1256,102 @@ async function runScan() {
   }
 
   // ── OXFAM ONLINE SCAN ──
-  // Zero bot competition, no auth needed, staff don't know resale values
   const OXFAM_SEARCHES = [
-    { term: 'barbour jacket', brand: 'Barbour', avgSell: 85, minProfit: 22 },
-    { term: 'stone island jacket', brand: 'Stone Island', avgSell: 110, minProfit: 35 },
-    { term: 'patagonia fleece jacket', brand: 'Patagonia', avgSell: 55, minProfit: 18 },
-    { term: 'north face jacket fleece', brand: 'North Face', avgSell: 45, minProfit: 15 },
-    { term: 'arc teryx jacket', brand: "Arc'teryx", avgSell: 110, minProfit: 35 },
-    { term: 'ralph lauren jacket coat', brand: 'Ralph Lauren', avgSell: 40, minProfit: 14 },
-    { term: 'dr martens boots', brand: 'Dr Martens', avgSell: 65, minProfit: 20 },
-    { term: 'adidas samba trainers', brand: 'Adidas', avgSell: 48, minProfit: 15 },
-    { term: 'new balance trainers', brand: 'New Balance', avgSell: 65, minProfit: 20 },
-    { term: 'levi jeans', brand: 'Levi', avgSell: 35, minProfit: 12 },
-    { term: 'carhartt jacket', brand: 'Carhartt', avgSell: 50, minProfit: 16 },
-    { term: 'cp company jacket', brand: 'CP Company', avgSell: 90, minProfit: 30 },
+    { term: 'barbour jacket', brand: 'Barbour', avgSell: 85, minProfit: 22, cat: 'outerwear' },
+    { term: 'stone island jacket', brand: 'Stone Island', avgSell: 110, minProfit: 35, cat: 'outerwear' },
+    { term: 'patagonia fleece jacket', brand: 'Patagonia', avgSell: 55, minProfit: 18, cat: 'outerwear' },
+    { term: 'north face jacket fleece', brand: 'North Face', avgSell: 45, minProfit: 15, cat: 'outerwear' },
+    { term: 'arc teryx jacket', brand: "Arc'teryx", avgSell: 110, minProfit: 35, cat: 'outerwear' },
+    { term: 'ralph lauren jacket coat', brand: 'Ralph Lauren', avgSell: 40, minProfit: 14, cat: 'outerwear' },
+    { term: 'dr martens boots', brand: 'Dr Martens', avgSell: 65, minProfit: 20, cat: 'boots' },
+    { term: 'adidas samba trainers', brand: 'Adidas', avgSell: 48, minProfit: 15, cat: 'trainers' },
+    { term: 'new balance trainers', brand: 'New Balance', avgSell: 65, minProfit: 20, cat: 'trainers' },
+    { term: 'levi jeans', brand: 'Levi', avgSell: 35, minProfit: 12, cat: 'jeans' },
+    { term: 'carhartt jacket', brand: 'Carhartt', avgSell: 50, minProfit: 16, cat: 'outerwear' },
+    { term: 'cp company jacket', brand: 'CP Company', avgSell: 90, minProfit: 30, cat: 'outerwear' },
   ];
   const oxfamItems = await scanOxfam(OXFAM_SEARCHES.map(s => s.term));
   for (const item of oxfamItems) {
     if (alertedIds.has('oxfam_' + item.url)) continue;
-    // Find matching search config for profit calc
-    const cfg = OXFAM_SEARCHES.find(s => item.title.toLowerCase().includes(s.brand.toLowerCase()));
+    const cfg = OXFAM_SEARCHES.find(s => item.title.toLowerCase().includes(s.brand.toLowerCase().split(' ')[0]));
     if (!cfg) continue;
+
+    const titleLow = item.title.toLowerCase();
+
+    // Hard reject — condition words in title
+    const condReject = ['discolour','discolor','stain','mark','damage','repair','hole','tear',
+      'worn','well worn','fault','flaw','smell','odour','crack','broken','missing',
+      'poor condition','fair condition','heavily','tatty','grubby'];
+    if (condReject.some(w => titleLow.includes(w))) {
+      console.log('[OXFAM SKIP] condition: ' + item.title.substring(0, 60));
+      continue;
+    }
+
+    // Hard reject — small/kids sizes for footwear
+    if (['trainers','boots'].includes(cfg.cat)) {
+      const sizeMatch = titleLow.match(/size[:\s]+(\d+\.?\d*)/);
+      if (sizeMatch) {
+        const sz = parseFloat(sizeMatch[1]);
+        if (sz <= 6) { console.log('[OXFAM SKIP] size ' + sz + ': ' + item.title.substring(0, 50)); continue; }
+      }
+      if (['children','kids','junior','toddler','infant'].some(w => titleLow.includes(w))) continue;
+    }
+
+    // Profit check — require 60% ROI minimum
     const netProfit = cfg.avgSell - item.price - POSTAGE;
     if (netProfit < cfg.minProfit) continue;
     const roi = Math.round((netProfit / item.price) * 100);
-    if (roi < 50) continue;
+    if (roi < 60) continue;
+
+    // Run Claude vision scoring — same as eBay items
+    const scored = await scoreAppeal(item.title, cfg.brand, cfg.cat, item.condition || '', item.price, item.image || null);
+    if (scored) {
+      const minCond = ['trainers','boots'].includes(cfg.cat) ? 8 : 7;
+      if (scored.condition < minCond) {
+        console.log('[OXFAM SKIP] Claude condition ' + scored.condition + '/10: ' + item.title.substring(0, 50));
+        console.log('  Reason: ' + scored.conditionReason);
+        continue;
+      }
+      if (scored.appeal < 6) {
+        console.log('[OXFAM SKIP] Claude appeal ' + scored.appeal + '/10: ' + item.title.substring(0, 50));
+        continue;
+      }
+    }
+
+    // Get real eBay sold prices for accurate profit calculation
+    const soldQuery = cfg.brand + ' ' + (cfg.cat === 'jeans' ? 'jeans' : cfg.cat === 'trainers' ? 'trainers' : cfg.cat === 'boots' ? 'boots' : 'jacket');
+    const oxfamSoldData = await getSoldPrices(soldQuery, token);
+    const realAvgSell = oxfamSoldData?.isReal && oxfamSoldData.sampleSize >= 5
+      ? oxfamSoldData.vintedEstimate
+      : cfg.avgSell;
+    const realNetProfit = realAvgSell - item.price - POSTAGE;
+    if (realNetProfit < cfg.minProfit) {
+      console.log('[OXFAM SKIP] real sold data shows margin too thin (£' + Math.round(realNetProfit) + '): ' + item.title.substring(0, 50));
+      continue;
+    }
+    const realRoi = Math.round((realNetProfit / item.price) * 100);
+
     alertedIds.add('oxfam_' + item.url);
+    const tier = scored ? (scored.appeal >= 8 && realNetProfit >= cfg.minProfit * 1.5 ? 'mustbuy' : 'good') : (realNetProfit >= cfg.minProfit * 1.5 ? 'mustbuy' : 'good');
     alertDeals.push({
       itemId: 'oxfam_' + item.url,
       title: item.title,
       price: item.price,
       url: item.url,
       source: 'Oxfam Online',
-      vintedListPrice: cfg.avgSell,
-      vintedNet: Math.round(netProfit),
-      roi,
-      confidenceTier: netProfit >= cfg.minProfit * 1.5 ? 'mustbuy' : 'good',
-      confidenceScore: netProfit,
-      soldCount: 0,
-      ebayMedian: cfg.avgSell,
+      vintedListPrice: realAvgSell,
+      vintedNet: Math.round(realNetProfit),
+      roi: realRoi,
+      confidenceTier: tier,
+      confidenceScore: realNetProfit,
+      soldCount: oxfamSoldData?.sampleSize || 0,
+      ebayMedian: oxfamSoldData?.ebaySoldMedian || realAvgSell,
+      soldData: oxfamSoldData,
+      appealScore: scored?.appeal,
+      condScore: scored?.condition,
     });
-    console.log('[OXFAM] ' + item.title.substring(0, 50) + ' — £' + item.price + ' → relist £' + cfg.avgSell + ' (+£' + Math.round(netProfit) + ')');
+    console.log('[OXFAM' + (tier === 'mustbuy' ? ' 🎯' : '') + '] ' + item.title.substring(0, 50) + ' — £' + item.price + ' → relist £' + realAvgSell + ' (+£' + Math.round(realNetProfit) + ')' + (scored ? ' [A:' + scored.appeal + ' C:' + scored.condition + ']' : ''));
   }
-
   // ── EBAY AUCTION SCAN — instant alert for ending soon ──
   console.log('Scanning eBay auctions ending within 4 hours...');
   const auctionItems = await scanAuctions(token);
@@ -1327,13 +1385,18 @@ async function runScan() {
   const mustBuysOnly = alertDeals.filter(d => d.confidenceTier === 'mustbuy');
   if (mustBuysOnly.length > 0) {
     mustBuysOnly.sort((a, b) => b.confidenceScore - a.confidenceScore);
-    // Send Telegram for top eBay deal
-    const top = mustBuysOnly[0];
-    await sendTelegram('🎯 <b>EBAY MUST BUY</b>\n' +
-      '<b>' + top.title.substring(0, 60) + '</b>\n' +
-      '💰 Buy <b>£' + top.price + '</b> → Relist <b>£' + top.vintedListPrice + '</b>\n' +
-      '📈 Profit: <b>+£' + top.vintedNet + '</b> (' + top.roi + '% ROI)\n' +
-      '🔗 <a href="' + (top.url || top.itemWebUrl || '') + '">View on eBay</a>');
+    // Send Telegram for every Must Buy — instant notification regardless of source
+    for (const deal of mustBuysOnly.slice(0, 5)) {
+      const source = deal.source || 'eBay';
+      const emoji = source.includes('Oxfam') ? '🏪' : source.includes('Vinted') ? '👗' : source.includes('Auction') ? '⏱' : '🎯';
+      const sourceLabel = source.includes('Oxfam') ? 'OXFAM' : source.includes('Vinted') ? 'VINTED' : source.includes('Auction') ? 'AUCTION' : 'EBAY';
+      const msg = emoji + ' <b>' + sourceLabel + ' MUST BUY</b>\n' +
+        '<b>' + deal.title.substring(0, 60) + '</b>\n' +
+        '💰 Buy <b>£' + deal.price + '</b> → Relist <b>£' + deal.vintedListPrice + '</b>\n' +
+        '📈 Profit: <b>+£' + deal.vintedNet + '</b> (' + deal.roi + '% ROI)\n' +
+        '🔗 <a href="' + (deal.url || deal.itemWebUrl || '') + '">View listing</a>';
+      await sendTelegram(msg);
+    }
     await sendAlert(mustBuysOnly.slice(0, 5));
   } else {
     console.log('No Must Buy deals this scan — skipping email');
@@ -1374,8 +1437,16 @@ async function runVintedScan() {
       if (netProfit < item.minProfit || roi < MIN_ROI) continue;
 
       let appealData = null;
-      if (roi >= 150 && ANTHROPIC_KEY) {
-        appealData = await scoreAppeal(item.title, item.brand, item.cat, 'listed on Vinted', item.price);
+      // Always run Claude scoring for Vinted — condition and appeal check on every item
+      if (ANTHROPIC_KEY) {
+        appealData = await scoreAppeal(item.title, item.brand, item.cat, 'listed on Vinted', item.price, item.image || null);
+        if (appealData) {
+          const minCond = ['trainers','boots'].includes(item.cat) ? 8 : 7;
+          if (appealData.condition < minCond || appealData.appeal < 6) {
+            console.log('[VINTED FILTERED] ' + item.title.substring(0, 45) + ' A:' + appealData.appeal + ' C:' + appealData.condition + ' — ' + (appealData.appeal < 6 ? appealData.appealReason : appealData.conditionReason));
+            continue;
+          }
+        }
       }
 
       const dealId = 'vinted-' + item.itemId;
