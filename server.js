@@ -1266,10 +1266,8 @@ async function runScan() {
           const appeal = await scoreAppeal(deal.title, deal.brand, deal.cat, deal.condition, deal.price, imageUrl);
 
           if (!appeal) {
-            // Claude unavailable — let through but flag it
-            alertDeals.push(deal);
-            alertedIds.add(deal.id);
-            console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 50) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ') [unscored]');
+            // Claude unavailable — SKIP, never let unscored items through
+            console.log('[SKIP-UNSCORED] ' + deal.title.substring(0, 50) + ' — Claude unavailable, skipping to avoid false positives');
             continue;
           }
 
@@ -1295,8 +1293,7 @@ async function runScan() {
             console.log('[FILTERED] ' + deal.title.substring(0, 45) + ' — Appeal:' + appealScore + ' Cond:' + condScore + ' (min:' + minCondScore + ') — ' + (appealScore < 7 ? appeal.appealReason : appeal.conditionReason));
           }
         } catch (e) {
-          alertDeals.push(deal);
-          alertedIds.add(deal.id);
+          console.log('[SKIP-ERROR] ' + deal.title.substring(0, 45) + ' — scoring error: ' + e.message);
         }
       }
 
