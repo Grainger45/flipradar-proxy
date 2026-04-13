@@ -934,40 +934,91 @@ async function getVintedCookie() {
   return null;
 }
 
-// ── VINTED TOKEN AUTO-REFRESH ──
+// ── VINTED TOKEN MANAGEMENT ──
+// Token is set via /refresh-token page (paste JWT from browser DevTools)
+// Bot sends Telegram alert when token is missing/expired
 let vintedAccessToken = null;
 let vintedTokenExpiry = 0;
+let vintedRefreshToken = null;
+let vintedTokenAlertSent = false; // Avoid spamming Telegram
 
 async function getVintedToken() {
-  // Return cached token if still valid (with 5 min buffer)
-  if (vintedAccessToken && Date.now() < vintedTokenExpiry - 300000) {
+  // Return cached in-memory token if still valid (with 10 min buffer)
+  if (vintedAccessToken && Date.now() < vintedTokenExpiry - 600000) {
     return vintedAccessToken;
   }
 
-  // Try env var first
+  // Try env var VINTED_TOKEN as fallback
   const envToken = process.env.VINTED_TOKEN;
   if (envToken) {
-    // Decode JWT to check expiry
     try {
       const payload = JSON.parse(Buffer.from(envToken.split('.')[1], 'base64').toString());
-      if (payload.exp && payload.exp * 1000 > Date.now() + 300000) {
+      if (payload.exp && payload.exp * 1000 > Date.now() + 600000) {
         vintedAccessToken = envToken;
         vintedTokenExpiry = payload.exp * 1000;
-        console.log('Vinted: using env token, expires in ' + Math.round((vintedTokenExpiry - Date.now()) / 60000) + ' mins');
+        vintedTokenAlertSent = false;
+        console.log('Vinted: env token valid for ' + Math.round((vintedTokenExpiry - Date.now()) / 60000) + ' more mins');
         return vintedAccessToken;
-      } else {
-        console.log('Vinted: env token expired, attempting auto-refresh...');
       }
     } catch(e) {
-      vintedAccessToken = envToken;
-      vintedTokenExpiry = Date.now() + 90 * 60 * 1000;
-      return vintedAccessToken;
+      // Invalid JWT format — ignore
     }
   }
 
-  // No valid token — prompt user to visit /refresh-token
-  console.log('Vinted: token expired — visit https://flipradar-proxy.onrender.com/refresh-token to refresh');
+  // Try auto-refresh using stored refresh token
+  if (vintedRefreshToken) {
+    try {
+      console.log('Vinted: attempting silent token refresh...');
+      const r = await fetch('https://www.vinted.co.uk/oauth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+        body: 'grant_type=refresh_token&client_id=web&refresh_token=' + encodeURIComponent(vintedRefreshToken)
+      });
+      if (r.ok) {
+        const data = await r.json();
+        if (data.access_token) {
+          vintedAccessToken = data.access_token;
+          vintedTokenExpiry = Date.now() + (data.expires_in ? data.expires_in * 1000 : 2 * 60 * 60 * 1000);
+          if (data.refresh_token) vintedRefreshToken = data.refresh_token;
+          vintedTokenAlertSent = false;
+          console.log('Vinted: silent token refresh successful, valid for ' + Math.round((vintedTokenExpiry - Date.now()) / 60000) + ' mins');
+          return vintedAccessToken;
+        }
+      }
+      console.log('Vinted: silent refresh failed status ' + r.status + ' — clearing refresh token');
+      vintedRefreshToken = null; // Refresh token is invalid, clear it
+    } catch(e) {
+      console.log('Vinted: silent refresh error:', e.message);
+    }
+  }
+
+  // Token expired or missing — alert once via Telegram then wait
+  if (!vintedTokenAlertSent) {
+    vintedTokenAlertSent = true;
+    const msg = '⚠️ <b>FlipRadar: Vinted token expired</b>\n\nVinted scanning paused.\n\n👉 <a href="https://flipradar-proxy.onrender.com/refresh-token">Tap here to refresh (30 seconds)</a>';
+    await sendTelegram(msg).catch(() => {});
+    console.log('Vinted: token expired — Telegram alert sent, scanning paused');
+  }
   return null;
+}
+
+// Called by /set-token endpoint when user pastes tokens
+function setVintedToken(token, refreshToken) {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+    vintedAccessToken = token;
+    vintedTokenExpiry = payload.exp ? payload.exp * 1000 : Date.now() + 2 * 60 * 60 * 1000;
+    if (refreshToken) {
+      vintedRefreshToken = refreshToken;
+      console.log('Vinted: refresh token stored — will auto-refresh silently');
+    }
+    vintedTokenAlertSent = false;
+    const minsLeft = Math.round((vintedTokenExpiry - Date.now()) / 60000);
+    console.log('Vinted: token set, valid for ' + minsLeft + ' mins' + (refreshToken ? ', auto-refresh enabled' : ''));
+    return { ok: true, minsLeft, autoRefresh: !!refreshToken };
+  } catch(e) {
+    return { ok: false, error: 'Invalid JWT token format — make sure you copied access_token_web' };
+  }
 }
 
 async function scanVinted(targets) {
@@ -1260,7 +1311,7 @@ async function runScan() {
     { term: 'barbour jacket', brand: 'Barbour', avgSell: 85, minProfit: 22, cat: 'outerwear' },
     { term: 'stone island jacket', brand: 'Stone Island', avgSell: 110, minProfit: 35, cat: 'outerwear' },
     { term: 'patagonia fleece jacket', brand: 'Patagonia', avgSell: 55, minProfit: 18, cat: 'outerwear' },
-    { term: 'north face jacket fleece', brand: 'North Face', avgSell: 45, minProfit: 15, cat: 'outerwear' },
+    { term: 'north face jacket fleece', brand: 'North Face', avgSell: 45, minProfit: 22, cat: 'outerwear' },
     { term: 'arc teryx jacket', brand: "Arc'teryx", avgSell: 110, minProfit: 35, cat: 'outerwear' },
     { term: 'ralph lauren jacket coat', brand: 'Ralph Lauren', avgSell: 40, minProfit: 14, cat: 'outerwear' },
     { term: 'dr martens boots', brand: 'Dr Martens', avgSell: 65, minProfit: 20, cat: 'boots' },
@@ -1273,7 +1324,13 @@ async function runScan() {
   const oxfamItems = await scanOxfam(OXFAM_SEARCHES.map(s => s.term));
   for (const item of oxfamItems) {
     if (alertedIds.has('oxfam_' + item.url)) continue;
-    const cfg = OXFAM_SEARCHES.find(s => item.title.toLowerCase().includes(s.brand.toLowerCase().split(' ')[0]));
+    // Strict brand match — full brand name must appear as a word, not substring
+    const cfg = OXFAM_SEARCHES.find(s => {
+      const brandLow = s.brand.toLowerCase().replace(/[^a-z0-9\s]/g, '');
+      const titleLow2 = item.title.toLowerCase().replace(/[^a-z0-9\s]/g, '');
+      // Full brand must appear as a distinct word sequence, not inside another word
+      return new RegExp('(?<![a-z])' + brandLow.replace(/\s+/g, '[\\s-]') + '(?![a-z])').test(titleLow2);
+    });
     if (!cfg) continue;
 
     const titleLow = item.title.toLowerCase();
@@ -1319,7 +1376,9 @@ async function runScan() {
     }
 
     // Get real eBay sold prices for accurate profit calculation
-    const soldQuery = cfg.brand + ' ' + (cfg.cat === 'jeans' ? 'jeans' : cfg.cat === 'trainers' ? 'trainers' : cfg.cat === 'boots' ? 'boots' : 'jacket');
+    // Use item title words for more specific sold price lookup — avoids "North Face" matching expensive down jackets
+    const titleWords = item.title.replace(/size:?\s*\w+/gi, '').replace(/\b(used|good|very|excellent|new)\b/gi, '').trim();
+    const soldQuery = titleWords.substring(0, 50);
     const oxfamSoldData = await getSoldPrices(soldQuery, token);
     const realAvgSell = oxfamSoldData?.isReal && oxfamSoldData.sampleSize >= 5
       ? oxfamSoldData.vintedEstimate
@@ -1411,10 +1470,8 @@ let vintedScanRunning = false;
 let vintedTargetIndex = 0; // Tracks which searches to run next
 
 async function runVintedScan() {
-  // Vinted temporarily disabled — token expires every 2 hours and credential
-  // login triggers 2FA SMS. Re-enable once persistent token solution is built.
-  console.log('Vinted scan paused — visit /refresh-token to re-enable');
-  return;
+  if (vintedScanRunning) return;
+  vintedScanRunning = true;
 
 
   // Run 3 searches per cycle, rotating through all targets
@@ -1503,10 +1560,10 @@ async function runVintedScan() {
   vintedScanRunning = false;
 }
 
-// ── SCHEDULE: eBay every 60 minutes, Vinted every 30 minutes ──
+// ── SCHEDULE: eBay every 15 minutes, Vinted every 5 minutes ──
 async function scheduledScan() {
   await runScan();
-  setTimeout(scheduledScan, 60 * 60 * 1000);
+  setTimeout(scheduledScan, 15 * 60 * 1000); // Every 15 minutes
 }
 
 async function scheduledVintedScan() {
@@ -1535,63 +1592,90 @@ app.get('/scan', (req, res) => {
 // ── TOKEN REFRESH PAGE ──
 // Visit this in your browser while logged into Vinted to refresh the token
 app.get('/refresh-token', (req, res) => {
+  const minsLeft = vintedAccessToken && vintedTokenExpiry > Date.now()
+    ? Math.round((vintedTokenExpiry - Date.now()) / 60000) : 0;
   res.send(`<!DOCTYPE html>
 <html>
 <head>
-  <title>FlipRadar — Refresh Vinted Token</title>
+  <title>FlipRadar — Vinted Token</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body { font-family: sans-serif; max-width: 500px; margin: 60px auto; padding: 20px; background: #0f0f0f; color: #fff; }
-    h1 { color: #22c55e; }
-    button { background: #22c55e; color: #000; border: none; padding: 14px 28px; font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; width: 100%; margin-top: 20px; }
-    #status { margin-top: 20px; padding: 14px; border-radius: 8px; display: none; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px 16px; background: #0f0f0f; color: #fff; }
+    h1 { color: #22c55e; font-size: 22px; margin-bottom: 8px; }
+    .status-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; margin-bottom: 16px; }
+    .active { background: #052e16; color: #22c55e; border: 1px solid #22c55e; }
+    .expired { background: #2d0a0a; color: #ef4444; border: 1px solid #ef4444; }
+    .steps { background: #1a1a1a; border-radius: 10px; padding: 16px; margin: 16px 0; }
+    .step { display: flex; gap: 12px; margin-bottom: 12px; align-items: flex-start; }
+    .step:last-child { margin-bottom: 0; }
+    .num { background: #22c55e; color: #000; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; flex-shrink: 0; margin-top: 2px; }
+    .step p { margin: 0; color: #ccc; font-size: 14px; line-height: 1.5; }
+    .step code { background: #333; padding: 2px 6px; border-radius: 4px; font-size: 12px; color: #22c55e; }
+    textarea { width: 100%; height: 100px; background: #1a1a1a; border: 1px solid #333; border-radius: 8px; color: #fff; padding: 12px; font-family: monospace; font-size: 12px; resize: vertical; margin: 8px 0; }
+    textarea:focus { outline: none; border-color: #22c55e; }
+    button { background: #22c55e; color: #000; border: none; padding: 14px; font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; width: 100%; }
+    button:active { opacity: 0.8; }
+    #result { margin-top: 12px; padding: 12px; border-radius: 8px; display: none; font-size: 14px; }
     .ok { background: #052e16; border: 1px solid #22c55e; color: #22c55e; }
     .err { background: #2d0a0a; border: 1px solid #ef4444; color: #ef4444; }
-    p { color: #aaa; line-height: 1.6; }
+    a { color: #22c55e; }
   </style>
 </head>
 <body>
-  <h1>🔑 Refresh Vinted Token</h1>
-  <p>Click the button below while logged into Vinted. Your browser will grab a fresh token and send it to FlipRadar automatically.</p>
-  <p><strong>You must be logged into Vinted in this browser for this to work.</strong></p>
-  <button onclick="refreshToken()">Grab Fresh Token</button>
-  <div id="status"></div>
+  <h1>🔑 FlipRadar — Vinted Token</h1>
+  <div class="status-badge ${minsLeft > 0 ? 'active' : 'expired'}">
+    ${minsLeft > 0 ? '✅ Active — ' + minsLeft + ' mins remaining' : '❌ Expired — scanning paused'}
+  </div>
+
+  <div class="steps">
+    <div class="step"><div class="num">1</div><p>Open <a href="https://www.vinted.co.uk" target="_blank">vinted.co.uk</a> and make sure you're logged in</p></div>
+    <div class="step"><div class="num">2</div><p>Press <strong>F12</strong> → click <strong>Application</strong> tab → <strong>Cookies</strong> → <strong>www.vinted.co.uk</strong></p></div>
+    <div class="step"><div class="num">3</div><p>Find <code>access_token_web</code> → copy value. Then find <code>refresh_token_web</code> → copy that too.</p></div>
+    <div class="step"><div class="num">4</div><p>Paste both below. With the refresh token, FlipRadar <strong>auto-renews silently</strong> — you won't need to do this again for days.</p></div>
+  </div>
+
+  <label style="color:#aaa;font-size:13px;">access_token_web <span style="color:#22c55e">(required)</span></label>
+  <textarea id="tokenInput" placeholder="eyJraWQiOiJ... (paste access_token_web here)"></textarea>
+  <label style="color:#aaa;font-size:13px;margin-top:8px;display:block;">refresh_token_web <span style="color:#888">(optional — enables auto-refresh)</span></label>
+  <textarea id="refreshInput" placeholder="paste refresh_token_web here (optional but recommended)"></textarea>
+  <button onclick="saveToken()">Save Tokens & Resume Scanning</button>
+  <div id="result"></div>
+
   <script>
-    async function refreshToken() {
-      const statusEl = document.getElementById('status');
-      statusEl.style.display = 'block';
-      statusEl.className = '';
-      statusEl.textContent = 'Fetching token from Vinted...';
+    async function saveToken() {
+      const token = document.getElementById('tokenInput').value.trim();
+      const resultEl = document.getElementById('result');
+      resultEl.style.display = 'block';
+      resultEl.className = '';
+      resultEl.textContent = 'Saving...';
+      if (!token || !token.includes('.')) {
+        resultEl.className = 'err';
+        resultEl.textContent = '❌ That does not look like a valid token. Make sure you copied access_token_web, not the session cookie.';
+        return;
+      }
       try {
-        // Fetch Vinted API using browser cookies
-        const r = await fetch('https://www.vinted.co.uk/api/v2/catalog/items?search_text=test&per_page=1', {
-          credentials: 'include',
-          headers: { 'Accept': 'application/json' }
-        });
-        if (!r.ok) { throw new Error('Vinted returned ' + r.status + ' — are you logged in?'); }
-        // Get token from cookie via Vinted identity endpoint
-        const r2 = await fetch('https://www.vinted.co.uk/api/v2/users/current_user', {
-          credentials: 'include',
-          headers: { 'Accept': 'application/json' }
-        });
-        // Extract access_token from page cookies indirectly via a known trick
-        // Send the session cookie to our server which will use it
-        const cookieData = document.cookie;
+        const refreshToken = document.getElementById('refreshInput').value.trim();
         const resp = await fetch('/set-token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cookie: cookieData, confirmed: true })
+          body: JSON.stringify({ token, refreshToken: refreshToken || null })
         });
-        const result = await resp.json();
-        if (result.ok) {
-          statusEl.className = 'ok';
-          statusEl.textContent = '✅ Token refreshed! FlipRadar will now scan Vinted for deals.';
+        const data = await resp.json();
+        if (data.ok) {
+          resultEl.className = 'ok';
+          resultEl.textContent = data.autoRefresh
+            ? '✅ Tokens saved with auto-refresh! FlipRadar will renew silently — no more manual refreshes needed for days.'
+            : '✅ Token saved! Valid for ' + data.minsLeft + ' minutes. Vinted scanning resumed.';
+          document.getElementById('tokenInput').value = '';
+          document.getElementById('refreshInput').value = '';
         } else {
-          throw new Error(result.error || 'Unknown error');
+          resultEl.className = 'err';
+          resultEl.textContent = '❌ ' + (data.error || 'Unknown error');
         }
       } catch(e) {
-        statusEl.className = 'err';
-        statusEl.textContent = '❌ ' + e.message;
+        resultEl.className = 'err';
+        resultEl.textContent = '❌ Network error: ' + e.message;
       }
     }
   </script>
@@ -1599,15 +1683,18 @@ app.get('/refresh-token', (req, res) => {
 </html>`);
 });
 
-// Token set endpoint — called by the refresh page
+// Token set endpoint — called by /refresh-token page
 app.post('/set-token', express.json(), (req, res) => {
-  const { cookie } = req.body || {};
-  if (!cookie) return res.json({ ok: false, error: 'No cookie provided' });
-  // Store the session cookie for use in API calls
-  vintedAccessToken = cookie;
-  vintedTokenExpiry = Date.now() + 90 * 60 * 1000;
-  console.log('Vinted: token manually refreshed via /refresh-token page');
-  res.json({ ok: true });
+  const { token, refreshToken } = req.body || {};
+  if (!token) return res.json({ ok: false, error: 'No token provided' });
+  const result = setVintedToken(token, refreshToken);
+  if (result.ok) {
+    const msg = result.autoRefresh
+      ? '✅ <b>Vinted token set with auto-refresh!</b> Valid for ' + result.minsLeft + ' mins, then renews silently.'
+      : '✅ <b>Vinted token refreshed!</b> Valid for ' + result.minsLeft + ' mins. Scanning resumed.';
+    sendTelegram(msg).catch(() => {});
+  }
+  res.json(result);
 });
 
 // Web app deals endpoint
