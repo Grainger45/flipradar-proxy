@@ -42,7 +42,7 @@ const POSTAGE = 3.50;
 const MIN_NET_PROFIT = 15;
 const MAX_BUY_PRICE = 20; // Compromise — £20 max, but only alerts when ROI > 100%
 const MUST_BUY_RATIO = 0.40; // Below 40% of market median = Must Buy
-const STRONG_RATIO = 0.55;   // Below 55% = Strong
+const STRONG_RATIO = 0.65;   // Below 65% = Strong (was 0.55 — too tight, missing real deals)
 const MIN_ROI = 100; // Must make at least 100% return on buy price (e.g. buy £10, profit £10+)
 
 // ── DEFINITIVE SEARCH QUEUE ──
@@ -1411,8 +1411,11 @@ let vintedScanRunning = false;
 let vintedTargetIndex = 0; // Tracks which searches to run next
 
 async function runVintedScan() {
-  if (vintedScanRunning) return;
-  vintedScanRunning = true;
+  // Vinted temporarily disabled — token expires every 2 hours and credential
+  // login triggers 2FA SMS. Re-enable once persistent token solution is built.
+  console.log('Vinted scan paused — visit /refresh-token to re-enable');
+  return;
+
 
   // Run 3 searches per cycle, rotating through all targets
   const batchSize = 3;
