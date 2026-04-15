@@ -292,7 +292,12 @@ function shouldReject(item, queueItem) {
 }
 
 // Get real eBay UK market prices — 40 listings, outliers removed
+const marketPriceCache = new Map();
 async function getMarketPrices(query, token) {
+  // Cache for 6 hours to save eBay API quota
+  const cacheKey = query.toLowerCase().trim();
+  const cached = marketPriceCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 6 * 60 * 60 * 1000) return cached.data;
   try {
     const q = encodeURIComponent(query);
     const url = 'https://api.ebay.com/buy/browse/v1/item_summary/search?q=' + q +
@@ -314,13 +319,15 @@ async function getMarketPrices(query, token) {
     if (!trimmed.length) return null;
 
     const median = trimmed[Math.floor(trimmed.length / 2)];
-    return {
+    const result = {
       median: Math.round(median * 100) / 100,
       low: trimmed[0],
       high: trimmed[trimmed.length - 1],
       sampleSize: prices.length,
       trimmedSize: trimmed.length
     };
+    marketPriceCache.set(cacheKey, { data: result, ts: Date.now() });
+    return result;
   } catch (e) { return null; }
 }
 
@@ -332,7 +339,7 @@ const soldPriceCache = new Map();
 async function getSoldPrices(query, token) {
   const cacheKey = query.toLowerCase().trim();
   const cached = soldPriceCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data; // 1hr cache
+  if (cached && Date.now() - cached.ts < 6 * 60 * 60 * 1000) return cached.data; // 6hr cache — saves eBay API quota
 
   try {
     // Search eBay UK completed sold listings
@@ -1563,7 +1570,7 @@ async function runVintedScan() {
 // ── SCHEDULE: eBay every 15 minutes, Vinted every 5 minutes ──
 async function scheduledScan() {
   await runScan();
-  setTimeout(scheduledScan, 15 * 60 * 1000); // Every 15 minutes
+  setTimeout(scheduledScan, 30 * 60 * 1000); // Every 30 minutes — keeps eBay API within 5000/day limit
 }
 
 async function scheduledVintedScan() {
