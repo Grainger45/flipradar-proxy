@@ -1300,7 +1300,7 @@ async function runScan() {
         }
       }
 
-      await new Promise(r => setTimeout(r, 700));
+      await new Promise(r => setTimeout(r, 1200)); // Rate limit buffer
     } catch (e) {
       console.error('Error scanning "' + qItem.q + '":', e.message);
     }
@@ -1877,7 +1877,9 @@ app.listen(process.env.PORT || 3000, () => {
     console.log('Vinted: refresh token loaded from env — will auto-fetch access token on first scan');
   }
 
-  setTimeout(scheduledScan, 30000);
+  // Stagger startup to avoid overlap with any dying instance
+  const startDelay = 30000 + Math.floor(Math.random() * 15000);
+  setTimeout(scheduledScan, startDelay);
   setTimeout(scheduledVintedScan, 60000);
 
   // Keep-alive ping every 10 minutes to prevent Render free tier sleep
