@@ -1229,10 +1229,13 @@ async function runScan() {
       ]);
 
       const ebayData = await ebayRes.json();
+      // Log eBay API errors so we can diagnose issues
+      if (ebayData.errors) { console.log('[EBAY ERR] ' + qItem.q.substring(0,30) + ': ' + JSON.stringify(ebayData.errors[0])); continue; }
+      const rawCount = (ebayData.itemSummaries || []).length;
       const listings = (ebayData.itemSummaries || [])
         .filter(l => !shouldReject(l, qItem))
         .slice(0, 12);
-
+      if (rawCount > 0 && !listings.length) console.log('[REJECT-ALL] ' + qItem.q.substring(0,30) + ': ' + rawCount + ' raw → 0 after filters');
       if (!listings.length) continue;
 
       // Get eBay sold prices — use soldQ for accurate category-specific results
@@ -1867,6 +1870,13 @@ app.listen(process.env.PORT || 3000, () => {
   console.log('Email service: ' + (SENDGRID_KEY ? 'SendGrid ready' : 'NOT SET'));
   console.log('Queue: ' + QUEUE.length + ' searches');
   console.log('Max buy price: £' + MAX_BUY_PRICE);
+
+  // Load Vinted refresh token from env on startup — survives Render restarts
+  if (process.env.VINTED_REFRESH_TOKEN) {
+    vintedRefreshToken = process.env.VINTED_REFRESH_TOKEN;
+    console.log('Vinted: refresh token loaded from env — will auto-fetch access token on first scan');
+  }
+
   setTimeout(scheduledScan, 30000);
   setTimeout(scheduledVintedScan, 60000);
 
