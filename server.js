@@ -1206,6 +1206,85 @@ async function scanAuctions(token) {
 
 let scanRunning = false;
 
+
+// ── DEPOP SCANNER ──
+// Parses Depop search results from raw HTML — no auth, no tokens, no rate limits
+// Items under £MAX_BUY_PRICE scored by Claude vision before alerting
+const depopAlertedIds = new Set();
+
+function parseDepopHtml(html) {
+  const items = [];
+  const chunks = html.split(/href="\/products\//);
+  for (let i = 1; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const slugMatch = chunk.match(/^([^"\/]+)\//);
+    if (!slugMatch) continue;
+    const slug = slugMatch[1];
+    if (depopAlertedIds.has(slug)) continue;
+    // Price: find £XX.XX
+    const priceMatch = chunk.match(/£([\d]+\.[\d]{2})/);
+    if (!priceMatch) continue;
+    const price = parseFloat(priceMatch[1]);
+    if (price > MAX_BUY_PRICE || price < 1) continue;
+    // Image
+    const imgMatch = chunk.match(/src="(https:\/\/media-photos\.depop\.com\/[^"]+)"/);
+    const imageUrl = imgMatch ? imgMatch[1].replace('/P0.', '/P1.').replace('/b1/', '/b1/') : null;
+    // Title from slug
+    const parts = slug.split('-');
+    const cleaned = parts.filter((p, idx) => {
+      if (idx === parts.length - 1 && /^[0-9a-f]{4,}$/i.test(p)) return false;
+      return true;
+    });
+    if (cleaned.length > 3 && /^[a-z0-9_]{3,}$/.test(cleaned[0]) && !cleaned[0].match(/^(barbour|stone|north|arc|patagonia|levi|nike|adidas|veja|dr|new|cp)/i)) cleaned.shift();
+    const title = cleaned.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    items.push({ slug, title, price, imageUrl, url: 'https://www.depop.com/products/' + slug + '/' });
+  }
+  return items;
+}
+
+async function scanDepop(targets) {
+  const results = [];
+  for (const target of targets) {
+    try {
+      const url = 'https://www.depop.com/search/?q=' + encodeURIComponent(target.search) +
+        '&sort=newlyListed&itemsPerPage=24&currency=GBP&country=GB';
+      const r = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-GB,en;q=0.9',
+          'Accept-Encoding': 'gzip, deflate, br'
+        },
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!r.ok) { console.log('Depop HTTP ' + r.status + ' for: ' + target.search); continue; }
+      const html = await r.text();
+      const items = parseDepopHtml(html).map(item => ({ ...item, brand: target.brand, cat: target.cat, avgSell: target.avgSell, minProfit: target.minProfit }));
+      results.push(...items);
+      await new Promise(r => setTimeout(r, 1500)); // Rate limit buffer
+    } catch (e) {
+      console.log('Depop error for "' + target.search + '":', e.message);
+    }
+  }
+  console.log('Depop: ' + results.length + ' items found under £' + MAX_BUY_PRICE);
+  return results;
+}
+
+const DEPOP_TARGETS = [
+  { search: 'Patagonia fleece jacket', brand: 'Patagonia', avgSell: 55, minProfit: 18, cat: 'outerwear' },
+  { search: 'North Face fleece jacket', brand: 'North Face', avgSell: 45, minProfit: 15, cat: 'outerwear' },
+  { search: 'Barbour wax jacket', brand: 'Barbour', avgSell: 85, minProfit: 22, cat: 'outerwear' },
+  { search: 'Stone Island jacket', brand: 'Stone Island', avgSell: 110, minProfit: 35, cat: 'outerwear' },
+  { search: 'Carhartt WIP jacket', brand: 'Carhartt WIP', avgSell: 50, minProfit: 16, cat: 'outerwear' },
+  { search: 'Adidas Samba trainers', brand: 'Adidas', avgSell: 65, minProfit: 18, cat: 'trainers' },
+  { search: 'New Balance 550 trainers', brand: 'New Balance', avgSell: 70, minProfit: 18, cat: 'trainers' },
+  { search: 'Nike Air Force 1', brand: 'Nike', avgSell: 55, minProfit: 15, cat: 'trainers' },
+  { search: 'Dr Martens 1460 boots', brand: 'Dr Martens', avgSell: 65, minProfit: 18, cat: 'boots' },
+  { search: 'Levi 501 jeans', brand: 'Levi', avgSell: 35, minProfit: 12, cat: 'jeans' },
+  { search: 'Ralph Lauren polo shirt', brand: 'Ralph Lauren', avgSell: 25, minProfit: 10, cat: 'polo' },
+  { search: 'Veja trainers', brand: 'Veja', avgSell: 45, minProfit: 14, cat: 'trainers' },
+];
+
 async function runScan() {
   if (scanRunning) {
     console.log('Scan already in progress — skipping duplicate');
@@ -1429,6 +1508,52 @@ async function runScan() {
     });
     console.log('[OXFAM' + (tier === 'mustbuy' ? ' 🎯' : '') + '] ' + item.title.substring(0, 50) + ' — £' + item.price + ' → relist £' + realAvgSell + ' (+£' + Math.round(realNetProfit) + ')' + (scored ? ' [A:' + scored.appeal + ' C:' + scored.condition + ']' : ''));
   }
+  // ── DEPOP SCAN ──
+  const depopItems = await scanDepop(DEPOP_TARGETS);
+  for (const item of depopItems) {
+    if (depopAlertedIds.has(item.slug)) continue;
+    const netProfit = item.avgSell - item.price - POSTAGE;
+    if (netProfit < item.minProfit) continue;
+    const roi = Math.round((netProfit / item.price) * 100);
+    if (roi < 60) continue;
+    // Claude vision scoring
+    const scored = await scoreAppeal(item.title, item.brand, item.cat, 'listed on Depop', item.price, item.imageUrl);
+    if (scored) {
+      const minCond = ['trainers','boots'].includes(item.cat) ? 8 : 7;
+      if (scored.condition < minCond || scored.appeal < 6) {
+        console.log('[DEPOP SKIP] A:' + scored.appeal + ' C:' + scored.condition + ' — ' + item.title.substring(0, 40));
+        continue;
+      }
+    }
+    // Real eBay sold data
+    const depopSoldData = await getSoldPrices(item.brand + ' ' + item.cat, token);
+    const realSell = depopSoldData?.isReal && depopSoldData.sampleSize >= 5 ? depopSoldData.vintedEstimate : item.avgSell;
+    const realNet = realSell - item.price - POSTAGE;
+    if (realNet < item.minProfit) { console.log('[DEPOP SKIP] margin too thin (£' + Math.round(realNet) + '): ' + item.title.substring(0,40)); continue; }
+    const realRoi = Math.round((realNet / item.price) * 100);
+    depopAlertedIds.add(item.slug);
+    const tier = scored && scored.appeal >= 8 && realNet >= item.minProfit * 1.5 ? 'mustbuy' : 'good';
+    alertDeals.push({
+      itemId: 'depop_' + item.slug,
+      title: item.title,
+      price: item.price,
+      url: item.url,
+      source: 'Depop',
+      vintedListPrice: realSell,
+      vintedNet: Math.round(realNet),
+      roi: realRoi,
+      confidenceTier: tier,
+      confidenceScore: tier === 'mustbuy' ? 90 : 70,
+      soldCount: depopSoldData?.sampleSize || 0,
+      ebayMedian: depopSoldData?.ebaySoldMedian || realSell,
+      soldData: depopSoldData,
+      appealScore: scored?.appeal,
+      condScore: scored?.condition,
+    });
+    console.log('[DEPOP' + (tier === 'mustbuy' ? ' 🎯' : '') + '] ' + item.title.substring(0,45) + ' — £' + item.price + ' → £' + realSell + ' (+£' + Math.round(realNet) + ')' + (scored ? ' [A:' + scored.appeal + ' C:' + scored.condition + ']' : ''));
+  }
+  console.log('Depop: ' + depopItems.filter(i => depopAlertedIds.has(i.slug)).length + ' alerted this scan');
+
   // ── EBAY AUCTION SCAN — instant alert for ending soon ──
   console.log('Scanning eBay auctions ending within 4 hours...');
   const auctionItems = await scanAuctions(token);
@@ -1465,8 +1590,8 @@ async function runScan() {
     // Send Telegram for every Must Buy — instant notification regardless of source
     for (const deal of mustBuysOnly.slice(0, 5)) {
       const source = deal.source || 'eBay';
-      const emoji = source.includes('Oxfam') ? '🏪' : source.includes('Vinted') ? '👗' : source.includes('Auction') ? '⏱' : '🎯';
-      const sourceLabel = source.includes('Oxfam') ? 'OXFAM' : source.includes('Vinted') ? 'VINTED' : source.includes('Auction') ? 'AUCTION' : 'EBAY';
+      const emoji = source.includes('Oxfam') ? '🏪' : source.includes('Vinted') ? '👗' : source.includes('Depop') ? '🛍️' : source.includes('Auction') ? '⏱' : '🎯';
+      const sourceLabel = source.includes('Oxfam') ? 'OXFAM' : source.includes('Vinted') ? 'VINTED' : source.includes('Depop') ? 'DEPOP' : source.includes('Auction') ? 'AUCTION' : 'EBAY';
       const msg = emoji + ' <b>' + sourceLabel + ' MUST BUY</b>\n' +
         '<b>' + deal.title.substring(0, 60) + '</b>\n' +
         '💰 Buy <b>£' + deal.price + '</b> → Relist <b>£' + deal.vintedListPrice + '</b>\n' +
@@ -1826,7 +1951,7 @@ app.get('/status', (req, res) => {
     <div class="card">
       <div class="card-label">Last eBay Scan</div>
       <div class="card-value">${timeSince(statusData.lastEbayScan)}</div>
-      <div class="card-sub">Every 60 minutes</div>
+      <div class="card-sub">Every 30 minutes</div>
     </div>
     <div class="card">
       <div class="card-label">Last Vinted Scan</div>
