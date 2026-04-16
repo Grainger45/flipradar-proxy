@@ -976,9 +976,18 @@ async function getVintedToken() {
   if (vintedRefreshToken) {
     try {
       console.log('Vinted: attempting silent token refresh...');
+      // Include full browser-like headers — Vinted rejects bare server requests
       const r = await fetch('https://www.vinted.co.uk/oauth/token', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Origin': 'https://www.vinted.co.uk',
+          'Referer': 'https://www.vinted.co.uk/',
+          'X-Requested-With': 'XMLHttpRequest',
+          'Cookie': 'refresh_token_web=' + vintedRefreshToken
+        },
         body: 'grant_type=refresh_token&client_id=web&refresh_token=' + encodeURIComponent(vintedRefreshToken)
       });
       if (r.ok) {
@@ -992,8 +1001,10 @@ async function getVintedToken() {
           return vintedAccessToken;
         }
       }
-      console.log('Vinted: silent refresh failed status ' + r.status + ' — clearing refresh token');
-      vintedRefreshToken = null; // Refresh token is invalid, clear it
+      const errText = await r.text().catch(() => '');
+      console.log('Vinted: silent refresh failed status ' + r.status + ' — ' + errText.substring(0, 100));
+      // Don't clear refresh token on 403 — might be temporary, keep trying
+      if (r.status !== 403) vintedRefreshToken = null;
     } catch(e) {
       console.log('Vinted: silent refresh error:', e.message);
     }
