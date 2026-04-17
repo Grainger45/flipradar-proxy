@@ -78,16 +78,16 @@ const QUEUE = [
   {q:'Burberry kids jacket coat boys',brand:'Burberry Kids',avgSell:60,minProfit:18,vintedQ:'Burberry kids jacket',soldQ:'Burberry kids jacket coat',cat:'kids',catId:'11484'},
 
   // ═══ TIER 3: PREMIUM POLOS ═══
-  {q:'Lacoste polo shirt mens',brand:'Lacoste',avgSell:32,minProfit:12,vintedQ:'Lacoste polo shirt mens',soldQ:'Lacoste polo shirt mens',cat:'polo',catId:'57991'},
-  {q:'Fred Perry polo shirt mens',brand:'Fred Perry',avgSell:28,minProfit:10,vintedQ:'Fred Perry polo shirt',soldQ:'Fred Perry polo shirt mens',cat:'polo',catId:'57991'},
-  {q:'Tommy Hilfiger polo shirt mens',brand:'Tommy Hilfiger',avgSell:28,minProfit:10,vintedQ:'Tommy Hilfiger polo',soldQ:'Tommy Hilfiger polo shirt mens',cat:'polo',catId:'57991'},
+  {q:'Lacoste polo shirt mens',brand:'Lacoste',avgSell:32,minProfit:8,vintedQ:'Lacoste polo shirt mens',soldQ:'Lacoste polo shirt mens',cat:'polo',catId:'57991'},
+  {q:'Fred Perry polo shirt mens',brand:'Fred Perry',avgSell:28,minProfit:7,vintedQ:'Fred Perry polo shirt',soldQ:'Fred Perry polo shirt mens',cat:'polo',catId:'57991'},
+  {q:'Tommy Hilfiger polo shirt mens',brand:'Tommy Hilfiger',avgSell:28,minProfit:7,vintedQ:'Tommy Hilfiger polo',soldQ:'Tommy Hilfiger polo shirt mens',cat:'polo',catId:'57991'},
 
   // ═══ TIER 4: NIKE VINTAGE ═══
-  {q:'Nike vintage hoodie sweatshirt',brand:'Nike',avgSell:42,minProfit:15,vintedQ:'Nike vintage hoodie',soldQ:'Nike vintage hoodie sweatshirt',cat:'nike',catId:'57990'},
-  {q:'Nike centre swoosh hoodie vintage',brand:'Nike',avgSell:48,minProfit:18,vintedQ:'Nike centre swoosh hoodie',soldQ:'Nike centre swoosh hoodie',cat:'nike',catId:'57990'},
-  {q:'Nike spellout sweatshirt vintage',brand:'Nike',avgSell:45,minProfit:16,vintedQ:'Nike spellout sweatshirt',soldQ:'Nike spellout sweatshirt vintage',cat:'nike',catId:'57990'},
-  {q:'Nike tech fleece jacket hoodie',brand:'Nike',avgSell:55,minProfit:18,vintedQ:'Nike tech fleece',soldQ:'Nike tech fleece jacket hoodie',cat:'nike',catId:'57988'},
-  {q:'Nike ACG jacket vintage',brand:'Nike',avgSell:65,minProfit:20,vintedQ:'Nike ACG jacket',soldQ:'Nike ACG jacket vintage',cat:'nike',catId:'57988'},
+  {q:'Nike vintage hoodie sweatshirt',brand:'Nike',avgSell:42,minProfit:10,vintedQ:'Nike vintage hoodie',soldQ:'Nike vintage hoodie sweatshirt',cat:'nike',catId:'57990'},
+  {q:'Nike centre swoosh hoodie vintage',brand:'Nike',avgSell:48,minProfit:10,vintedQ:'Nike centre swoosh hoodie',soldQ:'Nike centre swoosh hoodie',cat:'nike',catId:'57990'},
+  {q:'Nike spellout sweatshirt vintage',brand:'Nike',avgSell:45,minProfit:10,vintedQ:'Nike spellout sweatshirt',soldQ:'Nike spellout sweatshirt vintage',cat:'nike',catId:'57990'},
+  {q:'Nike tech fleece jacket hoodie',brand:'Nike',avgSell:55,minProfit:12,vintedQ:'Nike tech fleece',soldQ:'Nike tech fleece jacket hoodie',cat:'nike',catId:'57988'},
+  {q:'Nike ACG jacket vintage',brand:'Nike',avgSell:65,minProfit:12,vintedQ:'Nike ACG jacket',soldQ:'Nike ACG jacket vintage',cat:'nike',catId:'57988'},
 
   // ═══ TIER 5: OUTERWEAR ═══
   {q:'Barbour wax jacket mens',brand:'Barbour',avgSell:80,minProfit:25,vintedQ:'Barbour wax jacket',soldQ:'Barbour wax jacket mens',cat:'outerwear',catId:'57988'},
@@ -95,7 +95,7 @@ const QUEUE = [
   {q:'Patagonia fleece jacket half zip',brand:'Patagonia',avgSell:65,minProfit:20,vintedQ:'Patagonia fleece',soldQ:'Patagonia fleece jacket half zip',cat:'outerwear',catId:'57988'},
   {q:'Arc teryx fleece jacket mens',brand:"Arc'teryx",avgSell:90,minProfit:28,vintedQ:"Arc'teryx fleece",soldQ:"Arc'teryx fleece jacket",cat:'outerwear',catId:'57988'},
   {q:'Carhartt WIP jacket coat mens',brand:'Carhartt WIP',avgSell:55,minProfit:18,vintedQ:'Carhartt WIP jacket',soldQ:'Carhartt WIP jacket coat',cat:'outerwear',catId:'57988'},
-  {q:'Helly Hansen fleece jacket vintage',brand:'Helly Hansen',avgSell:38,minProfit:12,vintedQ:'Helly Hansen fleece',soldQ:'Helly Hansen fleece jacket',cat:'outerwear',catId:'57988'},
+  {q:'Helly Hansen fleece jacket vintage',brand:'Helly Hansen',avgSell:38,minProfit:8,vintedQ:'Helly Hansen fleece',soldQ:'Helly Hansen fleece jacket',cat:'outerwear',catId:'57988'},
 
   // ═══ TIER 6: GORPCORE ═══
   {q:'Patagonia down jacket puffer',brand:'Patagonia',avgSell:95,minProfit:30,vintedQ:'Patagonia down jacket',soldQ:'Patagonia down jacket puffer',cat:'gorpcore',catId:'57988'},
@@ -104,18 +104,18 @@ const QUEUE = [
   {q:'Patagonia Synchilla fleece vintage',brand:'Patagonia',avgSell:65,minProfit:20,vintedQ:'Patagonia Synchilla fleece',soldQ:'Patagonia Synchilla fleece',cat:'gorpcore',catId:'57988'},
 
   // ═══ TIER 7: VINTAGE BAND TEES ═══
-  {q:'vintage band t shirt single stitch 90s',brand:'Vintage Band Tee',avgSell:45,minProfit:15,vintedQ:'vintage band tshirt single stitch',soldQ:'vintage band t shirt single stitch 90s',cat:'vintage',catId:'57992'},
-  {q:'vintage rap tee hip hop shirt 90s',brand:'Vintage Rap Tee',avgSell:55,minProfit:18,vintedQ:'vintage rap tshirt hip hop',soldQ:'vintage rap tee hip hop 90s',cat:'vintage',catId:'57992'},
-  {q:'Harley Davidson vintage t shirt',brand:'Harley Davidson',avgSell:38,minProfit:12,vintedQ:'Harley Davidson vintage tshirt',soldQ:'Harley Davidson vintage t shirt',cat:'vintage',catId:'57992'},
+  {q:'vintage band t shirt single stitch 90s',brand:'Vintage Band Tee',avgSell:45,minProfit:10,vintedQ:'vintage band tshirt single stitch',soldQ:'vintage band t shirt single stitch 90s',cat:'vintage',catId:'57992'},
+  {q:'vintage rap tee hip hop shirt 90s',brand:'Vintage Rap Tee',avgSell:55,minProfit:10,vintedQ:'vintage rap tshirt hip hop',soldQ:'vintage rap tee hip hop 90s',cat:'vintage',catId:'57992'},
+  {q:'Harley Davidson vintage t shirt',brand:'Harley Davidson',avgSell:38,minProfit:10,vintedQ:'Harley Davidson vintage tshirt',soldQ:'Harley Davidson vintage t shirt',cat:'vintage',catId:'57992'},
 
-  // ═══ TIER 8: ACTIVEWEAR ═══
-  {q:'Lululemon leggings womens',brand:'Lululemon',avgSell:45,minProfit:15,vintedQ:'Lululemon leggings',soldQ:'Lululemon leggings womens',cat:'activewear',catId:'15724'},
-  {q:'Gymshark leggings set womens',brand:'Gymshark',avgSell:35,minProfit:12,vintedQ:'Gymshark set',soldQ:'Gymshark leggings set womens',cat:'activewear',catId:'15724'},
-  {q:'Sweaty Betty leggings womens',brand:'Sweaty Betty',avgSell:35,minProfit:12,vintedQ:'Sweaty Betty leggings',soldQ:'Sweaty Betty leggings womens',cat:'activewear',catId:'15724'},
+  // ═══ TIER 8: ACTIVEWEAR (profitable only) ═══
+  // Removed Lululemon/Gymshark — real sold data shows Vinted est £11-18, unprofitable under £20 buy
+  {q:'Sweaty Betty leggings womens',brand:'Sweaty Betty',avgSell:35,minProfit:8,vintedQ:'Sweaty Betty leggings',soldQ:'Sweaty Betty leggings womens',cat:'activewear',catId:'15724'},
+  {q:'Lululemon align leggings',brand:'Lululemon',avgSell:55,minProfit:14,vintedQ:'Lululemon align',soldQ:'Lululemon align leggings womens',cat:'activewear',catId:'15724'},
 
   // ═══ TIER 9: DENIM ═══
-  {q:'Levi 501 jeans mens vintage',brand:"Levi's",avgSell:45,minProfit:15,vintedQ:"Levi's 501 jeans",soldQ:"Levi's 501 jeans mens",cat:'denim',catId:'15689'},
-  {q:'Levi 501 jeans womens vintage',brand:"Levi's",avgSell:42,minProfit:14,vintedQ:"Levi's 501",soldQ:"Levi's 501 straight leg jeans womens",cat:'denim',catId:'11554'},
+  {q:'Levi 501 jeans mens straight blue vintage',brand:"Levi's",avgSell:45,minProfit:10,vintedQ:"Levi's 501 jeans",soldQ:"Levi's 501 jeans mens",cat:'denim',catId:'15689'},
+  {q:'Levi 501 jeans womens straight vintage',brand:"Levi's",avgSell:42,minProfit:10,vintedQ:"Levi's 501",soldQ:"Levi's 501 straight leg jeans womens",cat:'denim',catId:'11554'},
 
   // ═══ TIER 10: SELLER IGNORANCE ═══
   {q:'vintage jacket mens loft find clearance',brand:'Various',avgSell:40,minProfit:12,vintedQ:'vintage jacket',soldQ:'vintage jacket mens',cat:'vintage',catId:'57988'},
@@ -151,14 +151,14 @@ const QUEUE = [
   {q:'Sallomon trainers',brand:'Salomon',avgSell:80,minProfit:25,vintedQ:'Salomon trainers',soldQ:'Salomon trainers shoes',cat:'typo',catId:'15709'},
 
   // Veja — eco brand, premium Vinted prices, cheap on eBay
-  {q:'Veja trainers sneakers',brand:'Veja',avgSell:75,minProfit:22,vintedQ:'Veja trainers',soldQ:'Veja trainers sneakers',cat:'trainers',catId:'15709'},
-  {q:'Veja V-10 trainers',brand:'Veja',avgSell:85,minProfit:25,vintedQ:'Veja V-10',soldQ:'Veja V-10 trainers',cat:'trainers',catId:'15709'},
+  {q:'Veja trainers sneakers',brand:'Veja',avgSell:75,minProfit:14,vintedQ:'Veja trainers',soldQ:'Veja trainers sneakers',cat:'trainers',catId:'15709'},
+  {q:'Veja V-10 trainers',brand:'Veja',avgSell:85,minProfit:14,vintedQ:'Veja V-10',soldQ:'Veja V-10 trainers',cat:'trainers',catId:'15709'},
 
   // Birkenstock — always in demand, eBay sellers undervalue
   {q:'Birkenstock sandals Arizona',brand:'Birkenstock',avgSell:55,minProfit:18,vintedQ:'Birkenstock sandals',soldQ:'Birkenstock Arizona sandals',cat:'trainers',catId:'15709'},
 
   // Ralph Lauren — back in queue, polos still sell well
-  {q:'Ralph Lauren polo shirt mens',brand:'Ralph Lauren',avgSell:30,minProfit:12,vintedQ:'Ralph Lauren polo mens',soldQ:'Ralph Lauren polo shirt mens',cat:'polo',catId:'57991'},
+  {q:'Ralph Lauren polo shirt mens',brand:'Ralph Lauren',avgSell:30,minProfit:8,vintedQ:'Ralph Lauren polo mens',soldQ:'Ralph Lauren polo shirt mens',cat:'polo',catId:'57991'},
 
   // ═══ TIER 13: MORE TYPOS / ZERO COMPETITION ═══
   {q:'Arcteryx jacket',brand:"Arc'teryx",avgSell:110,minProfit:35,vintedQ:"Arc'teryx jacket",soldQ:"Arc'teryx jacket",cat:'typo',catId:'57988'},
@@ -175,13 +175,11 @@ const QUEUE = [
   {q:'Dr Martins 1460',brand:'Dr Martens',avgSell:80,minProfit:25,vintedQ:'Dr Martens 1460',soldQ:'Dr Martens 1460 boots',cat:'typo',catId:'62108'},
 
   // ═══ TIER 14: UNDERVALUED NICHE ═══
-  {q:'Berghaus fleece jacket mens',brand:'Berghaus',avgSell:35,minProfit:12,vintedQ:'Berghaus fleece',soldQ:'Berghaus fleece jacket',cat:'outerwear',catId:'57988'},
-  {q:'Penfield jacket mens vintage',brand:'Penfield',avgSell:55,minProfit:18,vintedQ:'Penfield jacket',soldQ:'Penfield jacket mens',cat:'outerwear',catId:'57988'},
+  // Berghaus (£21 Vinted est), Penfield (£25), Kappa (£19) removed — not profitable under £20 buy
   {q:'Fjallraven jacket mens',brand:'Fjallraven',avgSell:65,minProfit:20,vintedQ:'Fjallraven jacket',soldQ:'Fjallraven jacket mens',cat:'outerwear',catId:'57988'},
-  {q:'Napapijri jacket mens',brand:'Napapijri',avgSell:70,minProfit:22,vintedQ:'Napapijri jacket',soldQ:'Napapijri jacket mens',cat:'outerwear',catId:'57988'},
-  {q:'Ellesse vintage jacket track',brand:'Ellesse',avgSell:35,minProfit:12,vintedQ:'Ellesse vintage jacket',soldQ:'Ellesse vintage jacket',cat:'vintage',catId:'57988'},
-  {q:'Fila vintage jacket track top',brand:'Fila',avgSell:35,minProfit:12,vintedQ:'Fila vintage',soldQ:'Fila vintage jacket track top',cat:'vintage',catId:'57988'},
-  {q:'Kappa vintage jacket tracksuit',brand:'Kappa',avgSell:40,minProfit:14,vintedQ:'Kappa vintage',soldQ:'Kappa vintage jacket',cat:'vintage',catId:'57988'},
+  {q:'Napapijri jacket mens',brand:'Napapijri',avgSell:70,minProfit:20,vintedQ:'Napapijri jacket',soldQ:'Napapijri jacket mens',cat:'outerwear',catId:'57988'},
+  {q:'Ellesse vintage jacket track',brand:'Ellesse',avgSell:35,minProfit:8,vintedQ:'Ellesse vintage jacket',soldQ:'Ellesse vintage jacket',cat:'vintage',catId:'57988'},
+  {q:'Fila vintage jacket track top',brand:'Fila',avgSell:65,minProfit:18,vintedQ:'Fila vintage',soldQ:'Fila vintage jacket track top',cat:'vintage',catId:'57988'},
   {q:'New Balance 574 trainers',brand:'New Balance',avgSell:55,minProfit:16,vintedQ:'New Balance 574',soldQ:'New Balance 574 trainers',cat:'trainers',catId:'15709'},
   {q:'New Balance 1906 trainers',brand:'New Balance',avgSell:90,minProfit:28,vintedQ:'New Balance 1906',soldQ:'New Balance 1906 trainers',cat:'trainers',catId:'15709'},
   {q:'Asics Gel Kayano vintage trainers',brand:'Asics',avgSell:55,minProfit:16,vintedQ:'Asics Gel Kayano',soldQ:'Asics Gel Kayano trainers',cat:'trainers',catId:'15709'},
@@ -1099,7 +1097,11 @@ async function scanVinted(targets) {
         headers: {
           'Authorization': 'Bearer ' + token,
           'Accept': 'application/json',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Referer': 'https://www.vinted.co.uk/',
+          'Origin': 'https://www.vinted.co.uk',
+          'X-Requested-With': 'XMLHttpRequest',
+          'Accept-Language': 'en-GB,en;q=0.9',
         },
         signal: AbortSignal.timeout(10000)
       });
@@ -1442,7 +1444,7 @@ async function runScan() {
 
   // ── OXFAM ONLINE SCAN ──
   const OXFAM_SEARCHES = [
-    { term: 'barbour jacket', brand: 'Barbour', avgSell: 85, minProfit: 22, cat: 'outerwear' },
+    { term: 'barbour jacket', brand: 'Barbour', avgSell: 85, minProfit: 18, cat: 'outerwear' },
     { term: 'stone island jacket', brand: 'Stone Island', avgSell: 110, minProfit: 35, cat: 'outerwear' },
     { term: 'patagonia fleece jacket', brand: 'Patagonia', avgSell: 55, minProfit: 18, cat: 'outerwear' },
     { term: 'north face jacket fleece', brand: 'North Face', avgSell: 45, minProfit: 22, cat: 'outerwear' },
@@ -1455,7 +1457,6 @@ async function runScan() {
     { term: 'carhartt jacket', brand: 'Carhartt', avgSell: 50, minProfit: 16, cat: 'outerwear' },
     { term: 'cp company jacket', brand: 'CP Company', avgSell: 90, minProfit: 30, cat: 'outerwear' },
     { term: 'fjallraven jacket', brand: 'Fjallraven', avgSell: 65, minProfit: 20, cat: 'outerwear' },
-    { term: 'napapijri jacket', brand: 'Napapijri', avgSell: 70, minProfit: 22, cat: 'outerwear' },
     { term: 'moncler jacket', brand: 'Moncler', avgSell: 180, minProfit: 50, cat: 'outerwear' },
     { term: 'canada goose jacket', brand: 'Canada Goose', avgSell: 220, minProfit: 60, cat: 'outerwear' },
     { term: 'burberry coat jacket', brand: 'Burberry', avgSell: 120, minProfit: 40, cat: 'outerwear' },
