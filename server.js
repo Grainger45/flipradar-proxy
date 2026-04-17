@@ -951,7 +951,7 @@ let vintedTokenAlertSent = false; // Avoid spamming Telegram
 
 async function getVintedToken() {
   // Return cached in-memory token if still valid (with 10 min buffer)
-  if (vintedAccessToken && Date.now() < vintedTokenExpiry - 600000) {
+  if (vintedAccessToken && Date.now() < vintedTokenExpiry - 300000) {
     return vintedAccessToken;
   }
 
@@ -1251,14 +1251,14 @@ async function scanDepop(targets) {
       const r = await fetch(url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-GB,en;q=0.9',
-          'Accept-Encoding': 'gzip, deflate, br'
+          'Accept': 'text/html,application/xhtml+xml',
+          'Accept-Language': 'en-GB,en;q=0.9'
         },
-        signal: AbortSignal.timeout(15000)
+        signal: AbortSignal.timeout(20000)
       });
       if (!r.ok) { console.log('Depop HTTP ' + r.status + ' for: ' + target.search); continue; }
       const html = await r.text();
+      if (!html.includes('/products/')) { console.log('Depop: no products in response for: ' + target.search + ' (possible block)'); continue; }
       const items = parseDepopHtml(html).map(item => ({ ...item, brand: target.brand, cat: target.cat, avgSell: target.avgSell, minProfit: target.minProfit }));
       results.push(...items);
       await new Promise(r => setTimeout(r, 1500)); // Rate limit buffer
@@ -1346,6 +1346,10 @@ async function runScan() {
         const deal = scoreDeal(listing, marketData, qItem, soldData);
         if (deal && (deal.confidenceTier === 'mustbuy' || deal.confidenceTier === 'strong')) {
           candidates.push(deal);
+        } else if (!deal && !alertedIds.has(listing.itemId)) {
+          // Log why deals fail scoreDeal so we can tune thresholds
+          const p = parseFloat(listing.price?.value || 0);
+          if (p > 0 && p <= MAX_BUY_PRICE) console.log('[NO-DEAL] ' + (listing.title||'').substring(0,35) + ' £' + p + ' — failed ratio/profit check');
         }
       }
 
