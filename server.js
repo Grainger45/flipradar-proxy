@@ -42,8 +42,8 @@ const POSTAGE = 3.50;
 const MIN_NET_PROFIT = 15;
 const MAX_BUY_PRICE = 20; // Compromise — £20 max, but only alerts when ROI > 100%
 const MUST_BUY_RATIO = 0.40; // Below 40% of market median = Must Buy
-const STRONG_RATIO = 0.65;   // Below 65% = Strong (was 0.55 — too tight, missing real deals)
-const MIN_ROI = 100; // Must make at least 100% return on buy price (e.g. buy £10, profit £10+)
+const STRONG_RATIO = 0.75;   // Below 75% = Strong
+const MIN_ROI = 80; // Must make at least 80% return on buy price
 
 // ── DEFINITIVE SEARCH QUEUE ──
 // Built from real Vinted UK 2026 sell-through data and seller ignorance patterns
@@ -159,6 +159,34 @@ const QUEUE = [
 
   // Ralph Lauren — back in queue, polos still sell well
   {q:'Ralph Lauren polo shirt mens',brand:'Ralph Lauren',avgSell:30,minProfit:12,vintedQ:'Ralph Lauren polo mens',soldQ:'Ralph Lauren polo shirt mens',cat:'polo',catId:'57991'},
+
+  // ═══ TIER 13: MORE TYPOS / ZERO COMPETITION ═══
+  {q:'Arcteryx jacket',brand:"Arc'teryx",avgSell:110,minProfit:35,vintedQ:"Arc'teryx jacket",soldQ:"Arc'teryx jacket",cat:'typo',catId:'57988'},
+  {q:'Arc terx jacket',brand:"Arc'teryx",avgSell:110,minProfit:35,vintedQ:"Arc'teryx jacket",soldQ:"Arc'teryx jacket",cat:'typo',catId:'57988'},
+  {q:'Patagona fleece',brand:'Patagonia',avgSell:65,minProfit:20,vintedQ:'Patagonia fleece',soldQ:'Patagonia fleece jacket',cat:'typo',catId:'57988'},
+  {q:'Nort Face jacket',brand:'North Face',avgSell:55,minProfit:18,vintedQ:'North Face jacket',soldQ:'North Face fleece jacket',cat:'typo',catId:'57988'},
+  {q:'Barbour barbour jacket',brand:'Barbour',avgSell:80,minProfit:25,vintedQ:'Barbour jacket',soldQ:'Barbour wax jacket',cat:'typo',catId:'57988'},
+  {q:'Stoneisland jacket',brand:'Stone Island',avgSell:110,minProfit:35,vintedQ:'Stone Island jacket',soldQ:'Stone Island jacket',cat:'typo',catId:'57988'},
+  {q:'Carharrt jacket',brand:'Carhartt WIP',avgSell:55,minProfit:18,vintedQ:'Carhartt WIP jacket',soldQ:'Carhartt WIP jacket',cat:'typo',catId:'57988'},
+  {q:'Lululemen leggings',brand:'Lululemon',avgSell:45,minProfit:15,vintedQ:'Lululemon leggings',soldQ:'Lululemon leggings womens',cat:'typo',catId:'15724'},
+  {q:'Adidas Samba trainers size',brand:'Adidas',avgSell:65,minProfit:18,vintedQ:'Adidas Samba',soldQ:'Adidas Samba trainers shoes',cat:'typo',catId:'15709'},
+  {q:'Nike Air Force1 trainers',brand:'Nike',avgSell:55,minProfit:15,vintedQ:'Nike Air Force 1',soldQ:'Nike Air Force 1 trainers shoes',cat:'typo',catId:'15709'},
+  {q:'Levis 501 jeans vintage',brand:"Levi's",avgSell:45,minProfit:15,vintedQ:"Levi's 501",soldQ:"Levi's 501 jeans mens",cat:'typo',catId:'15689'},
+  {q:'Dr Martins 1460',brand:'Dr Martens',avgSell:80,minProfit:25,vintedQ:'Dr Martens 1460',soldQ:'Dr Martens 1460 boots',cat:'typo',catId:'62108'},
+
+  // ═══ TIER 14: UNDERVALUED NICHE ═══
+  {q:'Berghaus fleece jacket mens',brand:'Berghaus',avgSell:35,minProfit:12,vintedQ:'Berghaus fleece',soldQ:'Berghaus fleece jacket',cat:'outerwear',catId:'57988'},
+  {q:'Penfield jacket mens vintage',brand:'Penfield',avgSell:55,minProfit:18,vintedQ:'Penfield jacket',soldQ:'Penfield jacket mens',cat:'outerwear',catId:'57988'},
+  {q:'Fjallraven jacket mens',brand:'Fjallraven',avgSell:65,minProfit:20,vintedQ:'Fjallraven jacket',soldQ:'Fjallraven jacket mens',cat:'outerwear',catId:'57988'},
+  {q:'Napapijri jacket mens',brand:'Napapijri',avgSell:70,minProfit:22,vintedQ:'Napapijri jacket',soldQ:'Napapijri jacket mens',cat:'outerwear',catId:'57988'},
+  {q:'Ellesse vintage jacket track',brand:'Ellesse',avgSell:35,minProfit:12,vintedQ:'Ellesse vintage jacket',soldQ:'Ellesse vintage jacket',cat:'vintage',catId:'57988'},
+  {q:'Fila vintage jacket track top',brand:'Fila',avgSell:35,minProfit:12,vintedQ:'Fila vintage',soldQ:'Fila vintage jacket track top',cat:'vintage',catId:'57988'},
+  {q:'Kappa vintage jacket tracksuit',brand:'Kappa',avgSell:40,minProfit:14,vintedQ:'Kappa vintage',soldQ:'Kappa vintage jacket',cat:'vintage',catId:'57988'},
+  {q:'New Balance 574 trainers',brand:'New Balance',avgSell:55,minProfit:16,vintedQ:'New Balance 574',soldQ:'New Balance 574 trainers',cat:'trainers',catId:'15709'},
+  {q:'New Balance 1906 trainers',brand:'New Balance',avgSell:90,minProfit:28,vintedQ:'New Balance 1906',soldQ:'New Balance 1906 trainers',cat:'trainers',catId:'15709'},
+  {q:'Asics Gel Kayano vintage trainers',brand:'Asics',avgSell:55,minProfit:16,vintedQ:'Asics Gel Kayano',soldQ:'Asics Gel Kayano trainers',cat:'trainers',catId:'15709'},
+  {q:'Polo Ralph Lauren Rugby shirt',brand:'Ralph Lauren',avgSell:45,minProfit:15,vintedQ:'Ralph Lauren Rugby shirt',soldQ:'Polo Ralph Lauren Rugby shirt',cat:'polo',catId:'57991'},
+  {q:'Burberry shirt mens vintage',brand:'Burberry',avgSell:55,minProfit:18,vintedQ:'Burberry shirt vintage',soldQ:'Burberry shirt mens',cat:'polo',catId:'57991'},
 ];
 
 // ── REAL VINTED PRICE RANGES (from manual research March 2026) ──
@@ -554,7 +582,7 @@ function scoreDeal(item, marketData, queueItem, soldData) {
 
   if (hasSoldData && hasMarketData) {
     const ratio = price / marketData.median;
-    if (ratio <= MUST_BUY_RATIO && !hasCondWarn && vintedNet >= 15) {
+    if (ratio <= MUST_BUY_RATIO && !hasCondWarn && vintedNet >= itemMinProfit) {
       confidenceTier = 'mustbuy';
       confidenceScore = 95;
       confidenceReasons.push('✅ Based on ' + soldData.sampleSize + ' real eBay UK sold listings · Market median £' + soldData.ebaySoldMedian + ' → Vinted est £' + soldData.vintedEstimate);
@@ -564,11 +592,16 @@ function scoreDeal(item, marketData, queueItem, soldData) {
       confidenceScore = 78;
       confidenceReasons.push('✅ eBay sold median £' + soldData.ebaySoldMedian + ' → Vinted est £' + soldData.vintedEstimate + ' (' + soldData.sampleSize + ' sold)');
       confidenceReasons.push('Active market median £' + marketData.median + ' · Buy at ' + Math.round(ratio * 100) + '%');
+    } else if (!hasCondWarn && ratio <= STRONG_RATIO && vintedNet >= itemMinProfit) {
+      confidenceTier = 'strong';
+      confidenceScore = 60;
+      confidenceReasons.push('✅ eBay sold median £' + soldData.ebaySoldMedian + ' → Vinted est £' + soldData.vintedEstimate + ' (' + soldData.sampleSize + ' sold)');
+      confidenceReasons.push('Active eBay market median £' + marketData.median + ' · Buy at ' + Math.round(ratio * 100) + '%');
     } else {
       return null;
     }
   } else if (hasSoldData && !hasMarketData) {
-    if (!hasCondWarn && vintedNet >= 15) {
+    if (!hasCondWarn && vintedNet >= itemMinProfit) {
       confidenceTier = 'strong';
       confidenceScore = 70;
       confidenceReasons.push('✅ eBay sold data: ' + soldData.sampleSize + ' sold · Vinted est £' + soldData.vintedEstimate);
@@ -577,7 +610,7 @@ function scoreDeal(item, marketData, queueItem, soldData) {
     }
   } else if (!hasSoldData && hasMarketData) {
     const ratio = price / marketData.median;
-    if (ratio <= MUST_BUY_RATIO && !hasCondWarn && vintedNet >= 15) {
+    if (ratio <= MUST_BUY_RATIO && !hasCondWarn && vintedNet >= itemMinProfit) {
       confidenceTier = 'strong';
       confidenceScore = 65;
       confidenceReasons.push('Active eBay market median £' + marketData.median + ' · Buy at ' + Math.round(ratio * 100) + '%');
@@ -986,7 +1019,7 @@ async function getVintedToken() {
           'Origin': 'https://www.vinted.co.uk',
           'Referer': 'https://www.vinted.co.uk/',
           'X-Requested-With': 'XMLHttpRequest',
-          'Cookie': 'refresh_token_web=' + vintedRefreshToken
+          'Cookie': 'refresh_token_web=' + vintedRefreshToken + '; _vinted_fr_session=1; locale=en; anon_id=1'
         },
         body: 'grant_type=refresh_token&client_id=web&refresh_token=' + encodeURIComponent(vintedRefreshToken)
       });
@@ -1421,6 +1454,14 @@ async function runScan() {
     { term: 'levi jeans', brand: 'Levi', avgSell: 35, minProfit: 12, cat: 'jeans' },
     { term: 'carhartt jacket', brand: 'Carhartt', avgSell: 50, minProfit: 16, cat: 'outerwear' },
     { term: 'cp company jacket', brand: 'CP Company', avgSell: 90, minProfit: 30, cat: 'outerwear' },
+    { term: 'fjallraven jacket', brand: 'Fjallraven', avgSell: 65, minProfit: 20, cat: 'outerwear' },
+    { term: 'napapijri jacket', brand: 'Napapijri', avgSell: 70, minProfit: 22, cat: 'outerwear' },
+    { term: 'moncler jacket', brand: 'Moncler', avgSell: 180, minProfit: 50, cat: 'outerwear' },
+    { term: 'canada goose jacket', brand: 'Canada Goose', avgSell: 220, minProfit: 60, cat: 'outerwear' },
+    { term: 'burberry coat jacket', brand: 'Burberry', avgSell: 120, minProfit: 40, cat: 'outerwear' },
+    { term: 'salomon trainers shoes', brand: 'Salomon', avgSell: 80, minProfit: 25, cat: 'trainers' },
+    { term: 'nike dunk trainers', brand: 'Nike', avgSell: 75, minProfit: 22, cat: 'trainers' },
+    { term: 'veja trainers', brand: 'Veja', avgSell: 75, minProfit: 22, cat: 'trainers' },
   ];
   const oxfamItems = await scanOxfam(OXFAM_SEARCHES.map(s => s.term));
   for (const item of oxfamItems) {
@@ -1512,8 +1553,9 @@ async function runScan() {
     });
     console.log('[OXFAM' + (tier === 'mustbuy' ? ' 🎯' : '') + '] ' + item.title.substring(0, 50) + ' — £' + item.price + ' → relist £' + realAvgSell + ' (+£' + Math.round(realNetProfit) + ')' + (scored ? ' [A:' + scored.appeal + ' C:' + scored.condition + ']' : ''));
   }
-  // ── DEPOP SCAN ──
-  const depopItems = await scanDepop(DEPOP_TARGETS);
+  // ── DEPOP SCAN — disabled, Depop blocks server-side requests (403) ──
+  // const depopItems = await scanDepop(DEPOP_TARGETS);
+  const depopItems = [];
   for (const item of depopItems) {
     if (depopAlertedIds.has(item.slug)) continue;
     const netProfit = item.avgSell - item.price - POSTAGE;
@@ -1592,15 +1634,23 @@ async function runScan() {
   if (mustBuysOnly.length > 0) {
     mustBuysOnly.sort((a, b) => b.confidenceScore - a.confidenceScore);
     // Send Telegram for every Must Buy — instant notification regardless of source
-    for (const deal of mustBuysOnly.slice(0, 5)) {
+    const telegramDeals = [...mustBuysOnly, ...alertDeals.filter(d => d.confidenceTier === 'strong')].slice(0, 5);
+    for (const deal of telegramDeals) {
       const source = deal.source || 'eBay';
       const emoji = source.includes('Oxfam') ? '🏪' : source.includes('Vinted') ? '👗' : source.includes('Depop') ? '🛍️' : source.includes('Auction') ? '⏱' : '🎯';
       const sourceLabel = source.includes('Oxfam') ? 'OXFAM' : source.includes('Vinted') ? 'VINTED' : source.includes('Depop') ? 'DEPOP' : source.includes('Auction') ? 'AUCTION' : 'EBAY';
-      const msg = emoji + ' <b>' + sourceLabel + ' MUST BUY</b>\n' +
+      const listingUrl = deal.url || deal.itemWebUrl || '';
+      const soldLine = deal.soldData?.isReal ? '\n📊 Based on <b>' + deal.soldData.sampleSize + ' sold</b> · eBay median <b>£' + deal.soldData.ebaySoldMedian + '</b>' : '';
+      const condLine = deal.appealScore ? '\n✅ Appeal <b>' + deal.appealScore + '/10</b> · Condition <b>' + (deal.condScore || deal.conditionScore || '?') + '/10</b>' : '';
+      // Include image as URL trick for Telegram (photo + caption)
+      const imgUrl = deal.image || deal.imageUrl || '';
+      const msg = (imgUrl ? '<a href="' + imgUrl + '">&#8205;</a>' : '') +
+        emoji + ' <b>' + sourceLabel + ' MUST BUY</b>\n' +
         '<b>' + deal.title.substring(0, 60) + '</b>\n' +
         '💰 Buy <b>£' + deal.price + '</b> → Relist <b>£' + deal.vintedListPrice + '</b>\n' +
-        '📈 Profit: <b>+£' + deal.vintedNet + '</b> (' + deal.roi + '% ROI)\n' +
-        '🔗 <a href="' + (deal.url || deal.itemWebUrl || '') + '">View listing</a>';
+        '📈 Profit: <b>+£' + deal.vintedNet + '</b> (' + deal.roi + '% ROI)' +
+        soldLine + condLine + '\n' +
+        '🔗 <a href="' + listingUrl + '">TAP TO BUY →</a>';
       await sendTelegram(msg);
     }
     await sendAlert(mustBuysOnly.slice(0, 5));
@@ -1778,8 +1828,8 @@ app.get('/refresh-token', (req, res) => {
   <div class="steps">
     <div class="step"><div class="num">1</div><p>Open <a href="https://www.vinted.co.uk" target="_blank">vinted.co.uk</a> and make sure you're logged in</p></div>
     <div class="step"><div class="num">2</div><p>Press <strong>F12</strong> → click <strong>Application</strong> tab → <strong>Cookies</strong> → <strong>www.vinted.co.uk</strong></p></div>
-    <div class="step"><div class="num">3</div><p>Find <code>access_token_web</code> → copy value. Then find <code>refresh_token_web</code> → copy that too.</p></div>
-    <div class="step"><div class="num">4</div><p>Paste both below. With the refresh token, FlipRadar <strong>auto-renews silently</strong> — you won't need to do this again for days.</p></div>
+    <div class="step"><div class="num">3</div><p>Find <code>access_token_web</code> → copy the full value. Then find <code>refresh_token_web</code> → copy that too.</p></div>
+    <div class="step"><div class="num">4</div><p>Paste both below. FlipRadar will auto-renew the access token using the refresh token.</p></div>
   </div>
 
   <label style="color:#aaa;font-size:13px;">access_token_web <span style="color:#22c55e">(required)</span></label>
