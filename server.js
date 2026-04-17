@@ -43,7 +43,7 @@ const MIN_NET_PROFIT = 15;
 const MAX_BUY_PRICE = 20; // Compromise — £20 max, but only alerts when ROI > 100%
 const MUST_BUY_RATIO = 0.40; // Below 40% of market median = Must Buy
 const STRONG_RATIO = 0.75;   // Below 75% = Strong
-const MIN_ROI = 80; // Must make at least 80% return on buy price
+const MIN_ROI = 60; // Must make at least 60% return on buy price
 
 // ── DEFINITIVE SEARCH QUEUE ──
 // Built from real Vinted UK 2026 sell-through data and seller ignorance patterns
@@ -86,8 +86,8 @@ const QUEUE = [
   {q:'Nike vintage hoodie sweatshirt',brand:'Nike',avgSell:42,minProfit:10,vintedQ:'Nike vintage hoodie',soldQ:'Nike vintage hoodie sweatshirt',cat:'nike',catId:'57990'},
   {q:'Nike centre swoosh hoodie vintage',brand:'Nike',avgSell:48,minProfit:10,vintedQ:'Nike centre swoosh hoodie',soldQ:'Nike centre swoosh hoodie',cat:'nike',catId:'57990'},
   {q:'Nike spellout sweatshirt vintage',brand:'Nike',avgSell:45,minProfit:10,vintedQ:'Nike spellout sweatshirt',soldQ:'Nike spellout sweatshirt vintage',cat:'nike',catId:'57990'},
-  {q:'Nike tech fleece jacket hoodie',brand:'Nike',avgSell:55,minProfit:12,vintedQ:'Nike tech fleece',soldQ:'Nike tech fleece jacket hoodie',cat:'nike',catId:'57988'},
-  {q:'Nike ACG jacket vintage',brand:'Nike',avgSell:65,minProfit:12,vintedQ:'Nike ACG jacket',soldQ:'Nike ACG jacket vintage',cat:'nike',catId:'57988'},
+  {q:'Nike tech fleece jacket hoodie',brand:'Nike',avgSell:55,minProfit:10,vintedQ:'Nike tech fleece',soldQ:'Nike tech fleece jacket hoodie',cat:'nike',catId:'57988'},
+  {q:'Nike ACG jacket vintage',brand:'Nike',avgSell:65,minProfit:10,vintedQ:'Nike ACG jacket',soldQ:'Nike ACG jacket vintage',cat:'nike',catId:'57988'},
 
   // ═══ TIER 5: OUTERWEAR ═══
   {q:'Barbour wax jacket mens',brand:'Barbour',avgSell:80,minProfit:25,vintedQ:'Barbour wax jacket',soldQ:'Barbour wax jacket mens',cat:'outerwear',catId:'57988'},
