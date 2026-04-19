@@ -11,7 +11,9 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 
-// ── CONFIG ──
+// ══════════════════════════════════════════════════════════════════
+// CONFIG — all environment variables in one place
+// ══════════════════════════════════════════════════════════════════
 const CLIENT_ID = process.env.EBAY_CLIENT_ID;
 const CLIENT_SECRET = process.env.EBAY_CLIENT_SECRET;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
@@ -38,12 +40,184 @@ async function sendTelegram(message) {
   }
 }
 const ALERT_EMAIL = process.env.ALERT_EMAIL;
-const POSTAGE = 3.50;
-const MIN_NET_PROFIT = 15;
-const MAX_BUY_PRICE = 20; // Compromise — £20 max, but only alerts when ROI > 100%
-const MUST_BUY_RATIO = 0.40; // Below 40% of market median = Must Buy
-const STRONG_RATIO = 0.75;   // Below 75% = Strong
-const MIN_ROI = 60; // Must make at least 60% return on buy price
+
+// ══════════════════════════════════════════════════════════════════
+// SCORING THRESHOLDS — all deal-quality rules in one place
+// Change here and it applies everywhere in the codebase
+// ══════════════════════════════════════════════════════════════════
+const POSTAGE = 3.50;          // Royal Mail tracked small parcel
+const MAX_BUY_PRICE = 20;      // Never spend more than this on eBay/Oxfam
+
+// Price ratio thresholds (buy price as % of eBay active market median)
+const MUST_BUY_RATIO = 0.40;   // ≤40% of median = Must Buy (massive underpricing)
+const STRONG_RATIO = 0.75;     // ≤75% of median = Strong deal
+
+// Profit gates — item must pass ALL of these to alert
+const MIN_ROI = 60;            // Minimum 60% return on buy price
+const MIN_NET_PROFIT = 10;     // Minimum £10 net after postage (was 15, lowered for realism)
+
+// Claude scoring minimums — items scoring below these are silently rejected
+const MIN_APPEAL_SCORE = 7;    // Was 6 — raised to reduce niche/slow-sell items
+const MIN_CONDITION_CLOTHING = 7;  // For jackets, tees, jeans etc
+const MIN_CONDITION_FOOTWEAR = 8;  // Stricter — sole wear kills resale value
+
+// Sold data requirement — if 0 real sales, profit figure is unreliable
+const MIN_SOLD_SAMPLE = 3;     // At least 3 real eBay sold listings required
+
+// Auto-suspend thresholds — searches suspended after consistently failing
+const SUSPEND_AFTER_DAYS = 14; // Days with 0 qualifying deals before suspension
+const SUSPEND_CHECK_INTERVAL = 7 * 24 * 60 * 60 * 1000; // Weekly check
+
+
+// ══════════════════════════════════════════════════════════════════
+// FUZZY BRAND MATCHING — catches misspellings no other bot finds
+// Uses Levenshtein distance + known variant dictionary
+// e.g. "Carhart" → Carhartt, "Patogonia" → Patagonia
+// ══════════════════════════════════════════════════════════════════
+const BRAND_VARIANTS = {
+  'Patagonia':    ['patogonia','patagona','pategonia','pattagonia','patagonie','patagoni','patagoina'],
+  'Carhartt':     ['carhart','carhatt','cahartt','charhartt','carharrt','carhhartt','carharrt'],
+  'North Face':   ['nort face','northface','nortface','norht face','norrth face','norh face'],
+  "Arc'teryx":   ['arcteryx','arc terx','arctyrex','arcterx','arc tyrex','arctrix','arc terix'],
+  'Barbour':      ['barber','baربour','barbou','barbur','barbore'],
+  'Stone Island': ['stoneisland','stone ilsand','stone iland','stoone island','stone isalnd'],
+  'Lululemon':    ['lululemen','lulemon','luluemon','luluelmon','lululemen','lululeemon'],
+  'Adidas':       ['addidas','adiddas','adids','adidas samba','abidas'],
+  'Nike':         ['niike','nkie','nikee'],
+  'New Balance':  ['new ballance','newbalance','new blance','new balnce'],
+  'Dr Martens':   ['doc martens','doc martins','dr martins','dr marten','doc marten'],
+  'Salomon':      ['sallomon','salamon','saolmon','saalmon'],
+  'Veja':         ['veja v10','veja v-10'],
+  "Levi's":       ['levis','levi','levi 501','levies'],
+  'Ralph Lauren': ['ralph lauran','ralph laurn','ralf lauren','ralph laurren'],
+  'Fred Perry':   ['fred perry','fred pery'],
+  'Fjallraven':   ['fjall raven','fjallraveen','fjallravern'],
+  'Napapijri':    ['napapiri','napapirji','nappapijri'],
+  'Moncler':      ['monclair','monclaire','moncer'],
+  'Versace':      ['versache','versaci'],
+  'Armani':       ['armanie','armanni'],
+  'Moschino':     ['moschino','mochino','moschino'],
+  'Burberry':     ['burberrys','burberry','burbery','burbury'],
+};
+
+// Simple Levenshtein distance
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({length: m+1}, (_, i) => Array.from({length: n+1}, (_, j) => i === 0 ? j : j === 0 ? i : 0));
+  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
+    dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+  return dp[m][n];
+}
+
+// Returns matched brand if title contains a known misspelling
+function detectFuzzyBrand(title) {
+  const t = title.toLowerCase();
+  // 1. Check known variant dictionary first (fast path)
+  for (const [brand, variants] of Object.entries(BRAND_VARIANTS)) {
+    if (variants.some(v => t.includes(v))) return { brand, method: 'variant' };
+  }
+  // 2. Levenshtein check on title words vs brand names (catches novel typos)
+  const words = t.split(/\s+/);
+  const brands = Object.keys(BRAND_VARIANTS);
+  for (const brand of brands) {
+    const bLower = brand.toLowerCase();
+    const bWords = bLower.split(/\s+/);
+    // For multi-word brands, check consecutive word pairs
+    if (bWords.length > 1) {
+      for (let i = 0; i < words.length - 1; i++) {
+        const pair = words[i] + ' ' + words[i+1];
+        if (levenshtein(pair, bLower) <= 2) return { brand, method: 'levenshtein' };
+      }
+    } else {
+      // Single word brand — check each word in title
+      for (const word of words) {
+        if (word.length >= 4 && Math.abs(word.length - bLower.length) <= 2 && levenshtein(word, bLower) <= 2)
+          return { brand, method: 'levenshtein' };
+      }
+    }
+  }
+  return null;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// SELLER MOTIVATION SCORING — detects desperate/mispriced sellers
+// "moving house", "need gone", "quick sale" = lowball territory
+// ══════════════════════════════════════════════════════════════════
+const MOTIVATION_SIGNALS = [
+  'moving house', 'moving home', 'house move', 'relocating',
+  'need gone', 'needs to go', 'must go', 'must sell',
+  'quick sale', 'quick sell', 'selling fast', 'sell asap',
+  'clearing wardrobe', 'wardrobe clear', 'wardrobe sort', 'clear out',
+  'declutter', 'de-clutter', 'having a clear',
+  'open to offers', 'accepting offers', 'offers welcome', 'make an offer',
+  'no reasonable offer refused', 'no offer refused',
+  'unwanted gift', 'wrong size', 'never worn', 'bought by mistake',
+  'car boot', 'car-boot', 'charity', 'house clearance', 'loft find',
+  'bundle', 'job lot', 'joblot',
+];
+
+function scoreMotivation(title, description) {
+  const text = ((title || '') + ' ' + (description || '')).toLowerCase();
+  const found = MOTIVATION_SIGNALS.filter(s => text.includes(s));
+  return {
+    score: found.length,         // 0 = neutral, 1 = interested, 2+ = very motivated
+    signals: found.slice(0, 3)   // Return first 3 matched signals
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// SEARCH PERFORMANCE TRACKING — auto-suspend underperforming searches
+// Tracks last qualifying deal date per search term
+// Suspends searches with 0 deals in SUSPEND_AFTER_DAYS days
+// ══════════════════════════════════════════════════════════════════
+const searchPerformance = new Map(); // { q: { lastDeal: Date, totalDeals: 0, suspended: false, suspendedAt: null } }
+
+function recordDeal(q) {
+  const p = searchPerformance.get(q) || { lastDeal: null, totalDeals: 0, suspended: false, suspendedAt: null };
+  p.lastDeal = new Date();
+  p.totalDeals++;
+  p.suspended = false; // Auto-reactivate on deal found
+  p.suspendedAt = null;
+  searchPerformance.set(q, p);
+}
+
+function isSearchSuspended(q) {
+  const p = searchPerformance.get(q);
+  return p ? p.suspended : false;
+}
+
+async function runWeeklySuspendCheck() {
+  const now = Date.now();
+  const cutoff = now - (SUSPEND_AFTER_DAYS * 24 * 60 * 60 * 1000);
+  const suspended = [];
+  const reactivated = [];
+
+  for (const qItem of QUEUE) {
+    const q = qItem.q;
+    const p = searchPerformance.get(q);
+    if (!p) {
+      // Never found a deal — initialise
+      searchPerformance.set(q, { lastDeal: null, totalDeals: 0, suspended: false, suspendedAt: null });
+      continue;
+    }
+    // Suspend if no deal in SUSPEND_AFTER_DAYS and not already suspended
+    if (!p.suspended && p.lastDeal && p.lastDeal.getTime() < cutoff) {
+      p.suspended = true;
+      p.suspendedAt = new Date();
+      searchPerformance.set(q, p);
+      suspended.push(q);
+    }
+  }
+
+  if (suspended.length > 0) {
+    const msg = '⏸️ <b>FlipRadar: ' + suspended.length + ' searches auto-suspended</b>\n\nNo qualifying deals in ' + SUSPEND_AFTER_DAYS + ' days:\n' +
+      suspended.slice(0, 10).map(q => '• ' + q.substring(0, 40)).join('\n') +
+      '\n\nThey will reactivate automatically when a deal is found.';
+    await sendTelegram(msg).catch(() => {});
+    console.log('[AUTO-SUSPEND] Suspended:', suspended.join(', '));
+  }
+  if (reactivated.length > 0) console.log('[AUTO-REACTIVATE]:', reactivated.join(', '));
+}
 
 // ── DEFINITIVE SEARCH QUEUE ──
 // Built from real Vinted UK 2026 sell-through data and seller ignorance patterns
@@ -144,6 +318,18 @@ const QUEUE = [
   {q:'Dr Martens 1460 boots',brand:'Dr Martens',avgSell:80,minProfit:25,vintedQ:'Dr Martens 1460',soldQ:'Dr Martens 1460 boots',cat:'boots',catId:'62108'},
   {q:'Dr Martens womens boots shoes',brand:'Dr Martens',avgSell:70,minProfit:22,vintedQ:'Dr Martens womens',soldQ:'Dr Martens womens boots',cat:'boots',catId:'62107'},
   {q:'Dr Martins boots',brand:'Dr Martens',avgSell:70,minProfit:22,vintedQ:'Dr Martens boots',soldQ:'Dr Martens boots leather',cat:'typo',catId:'62108'},
+  // ═══ TIER 15: EXTENDED MISSPELLINGS (auto-detected by fuzzy matcher + explicit searches) ═══
+  {q:'Carhart jacket',brand:'Carhartt WIP',avgSell:55,minProfit:16,vintedQ:'Carhartt WIP jacket',soldQ:'Carhartt WIP jacket',cat:'typo',catId:'57988'},
+  {q:'Carhart WIP jacket',brand:'Carhartt WIP',avgSell:55,minProfit:16,vintedQ:'Carhartt WIP jacket',soldQ:'Carhartt WIP jacket',cat:'typo',catId:'57988'},
+  {q:'Arcteryx jacket',brand:"Arc'teryx",avgSell:110,minProfit:30,vintedQ:"Arc'teryx jacket",soldQ:"Arc'teryx jacket",cat:'typo',catId:'57988'},
+  {q:'Lululemen leggings',brand:'Lululemon',avgSell:55,minProfit:14,vintedQ:'Lululemon align',soldQ:'Lululemon leggings womens',cat:'typo',catId:'15724'},
+  {q:'Patagona fleece',brand:'Patagonia',avgSell:65,minProfit:18,vintedQ:'Patagonia fleece',soldQ:'Patagonia fleece jacket',cat:'typo',catId:'57988'},
+  {q:'Ralf Lauren polo',brand:'Ralph Lauren',avgSell:30,minProfit:8,vintedQ:'Ralph Lauren polo',soldQ:'Ralph Lauren polo shirt mens',cat:'typo',catId:'57991'},
+  {q:'Doc Martins boots',brand:'Dr Martens',avgSell:70,minProfit:20,vintedQ:'Dr Martens boots',soldQ:'Dr Martens boots leather',cat:'typo',catId:'62108'},
+  {q:'Salomon XT6 trainers',brand:'Salomon',avgSell:100,minProfit:28,vintedQ:'Salomon XT-6',soldQ:'Salomon XT-6 trail shoes',cat:'typo',catId:'15709'},
+  {q:'Sallomon trainers shoes',brand:'Salomon',avgSell:80,minProfit:22,vintedQ:'Salomon trainers',soldQ:'Salomon trainers trail',cat:'typo',catId:'15709'},
+  {q:'New Ballance 550 white',brand:'New Balance',avgSell:70,minProfit:18,vintedQ:'New Balance 550',soldQ:'New Balance 550 trainers',cat:'typo',catId:'15709'},
+  {q:'Addidas Samba trainers',brand:'Adidas',avgSell:65,minProfit:16,vintedQ:'Adidas Samba',soldQ:'Adidas Samba trainers',cat:'typo',catId:'15709'},
 
   // Salomon — gorpcore trending, eBay sellers have no idea of value
   {q:'Salomon trainers trail shoes',brand:'Salomon',avgSell:80,minProfit:25,vintedQ:'Salomon trainers',soldQ:'Salomon trainers trail running shoes',cat:'trainers',catId:'15709'},
@@ -545,7 +731,7 @@ function scoreDeal(item, marketData, queueItem, soldData) {
   // ── VINTED SELL PRICE: Use eBay sold data if available, fall back to manual ranges ──
   let vintedSellPrice, vintedDataSource, vintedRange;
 
-  if (soldData && soldData.isReal && soldData.sampleSize >= 5) {
+  if (soldData && soldData.isReal && soldData.sampleSize >= MIN_SOLD_SAMPLE) {
     // REAL: eBay sold median × 0.85 = estimated Vinted price
     vintedSellPrice = soldData.vintedEstimate;
     if (isExcellent) vintedSellPrice = Math.round(vintedSellPrice * 1.15);
@@ -622,6 +808,12 @@ function scoreDeal(item, marketData, queueItem, soldData) {
 
   if (isExcellent) { confidenceScore = Math.min(99, confidenceScore + 8); confidenceReasons.push('Excellent condition signals — commands higher price'); }
   if (queueItem.cat === 'typo') { confidenceScore = Math.min(99, confidenceScore + 5); confidenceReasons.push('Misspelled title — zero competition'); }
+  // Fuzzy brand match bonus — detected via Levenshtein/variant dictionary
+  const fuzzyMatch = detectFuzzyBrand(title);
+  if (fuzzyMatch && queueItem.cat !== 'typo') { confidenceScore = Math.min(99, confidenceScore + 8); confidenceReasons.push('Fuzzy brand match: "' + title.substring(0,30) + '" → ' + fuzzyMatch.brand + ' (' + fuzzyMatch.method + ')'); }
+  // Seller motivation bonus
+  const motivation = scoreMotivation(title, item.shortDescription || '');
+  if (motivation.score >= 1) { confidenceScore = Math.min(99, confidenceScore + motivation.score * 3); confidenceReasons.push('Motivated seller signal: ' + motivation.signals.join(', ')); }
   if (titleLower.includes('loft find') || titleLower.includes('house clearance')) { confidenceScore = Math.min(99, confidenceScore + 5); confidenceReasons.push('Seller likely unaware of value'); }
 
   const vintedTitle = generateVintedTitle(title, queueItem.brand, queueItem.cat);
@@ -1342,6 +1534,7 @@ async function runScan() {
   const alertDeals = [];
 
   for (const qItem of QUEUE) {
+    if (isSearchSuspended(qItem.q)) { console.log('[SUSPENDED] Skipping: ' + qItem.q.substring(0,40)); continue; }
     try {
       const q = encodeURIComponent(qItem.q);
 
@@ -1367,7 +1560,7 @@ async function runScan() {
       const listings = (ebayData.itemSummaries || [])
         .filter(l => !shouldReject(l, qItem))
         .slice(0, 12);
-      if (rawCount > 0 && !listings.length) console.log('[REJECT-ALL] ' + qItem.q.substring(0,30) + ': ' + rawCount + ' raw → 0 after filters');
+      if (rawCount > 0 && !listings.length) console.log('[REJECT-ALL] ' + qItem.q.substring(0,30) + ': ' + rawCount + ' raw → 0 after filters');      
       if (!listings.length) continue;
 
       // Get eBay sold prices — use soldQ for accurate category-specific results
@@ -1393,7 +1586,7 @@ async function runScan() {
       // ── CLAUDE SCORING — runs on EVERY candidate, no bypasses ──
       // Every deal from every source must pass Claude appeal + condition check
       const isFootwear = ['trainers', 'boots'].includes(qItem.cat);
-      const minCondScore = isFootwear ? 8 : 7;
+      const minCondScore = isFootwear ? MIN_CONDITION_FOOTWEAR : MIN_CONDITION_CLOTHING;
 
       candidates.sort((a, b) => b.roi - a.roi);
       const toScore = candidates.slice(0, 3);
@@ -1413,7 +1606,7 @@ async function runScan() {
           const appealScore = appeal.appeal;
           const condScore = appeal.condition;
 
-          if (appealScore >= 7 && condScore >= minCondScore) {
+          if (appealScore >= MIN_APPEAL_SCORE && condScore >= minCondScore) {
             deal.appealScore = appealScore;
             deal.conditionScore = condScore;
             deal.appealReason = appeal.appealReason;
@@ -1427,6 +1620,7 @@ async function runScan() {
             }
             alertDeals.push(deal);
             alertedIds.add(deal.id);
+            recordDeal(qItem.q); // Track performance
             console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 45) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ') A:' + appealScore + ' C:' + condScore);
           } else {
             console.log('[FILTERED] ' + deal.title.substring(0, 45) + ' — Appeal:' + appealScore + ' Cond:' + condScore + ' (min:' + minCondScore + ') — ' + (appealScore < 7 ? appeal.appealReason : appeal.conditionReason));
@@ -1506,13 +1700,13 @@ async function runScan() {
     // Run Claude vision scoring — same as eBay items
     const scored = await scoreAppeal(item.title, cfg.brand, cfg.cat, item.condition || '', item.price, item.image || null);
     if (scored) {
-      const minCond = ['trainers','boots'].includes(cfg.cat) ? 8 : 7;
+      const minCond = ['trainers','boots'].includes(cfg.cat) ? MIN_CONDITION_FOOTWEAR : MIN_CONDITION_CLOTHING;
       if (scored.condition < minCond) {
         console.log('[OXFAM SKIP] Claude condition ' + scored.condition + '/10: ' + item.title.substring(0, 50));
         console.log('  Reason: ' + scored.conditionReason);
         continue;
       }
-      if (scored.appeal < 6) {
+      if (scored.appeal < MIN_APPEAL_SCORE) {
         console.log('[OXFAM SKIP] Claude appeal ' + scored.appeal + '/10: ' + item.title.substring(0, 50));
         continue;
       }
@@ -1567,7 +1761,7 @@ async function runScan() {
     const scored = await scoreAppeal(item.title, item.brand, item.cat, 'listed on Depop', item.price, item.imageUrl);
     if (scored) {
       const minCond = ['trainers','boots'].includes(item.cat) ? 8 : 7;
-      if (scored.condition < minCond || scored.appeal < 6) {
+      if (scored.condition < minCond || scored.appeal < MIN_APPEAL_SCORE) {
         console.log('[DEPOP SKIP] A:' + scored.appeal + ' C:' + scored.condition + ' — ' + item.title.substring(0, 40));
         continue;
       }
@@ -1700,7 +1894,7 @@ async function runVintedScan() {
         appealData = await scoreAppeal(item.title, item.brand, item.cat, 'listed on Vinted', item.price, item.image || null);
         if (appealData) {
           const minCond = ['trainers','boots'].includes(item.cat) ? 8 : 7;
-          if (appealData.condition < minCond || appealData.appeal < 6) {
+          if (appealData.condition < minCond || appealData.appeal < MIN_APPEAL_SCORE) {
             console.log('[VINTED FILTERED] ' + item.title.substring(0, 45) + ' A:' + appealData.appeal + ' C:' + appealData.condition + ' — ' + (appealData.appeal < 6 ? appealData.appealReason : appealData.conditionReason));
             continue;
           }
@@ -2078,6 +2272,8 @@ app.listen(process.env.PORT || 3000, () => {
   // Stagger startup to avoid overlap with any dying instance
   const startDelay = 30000 + Math.floor(Math.random() * 15000);
   setTimeout(scheduledScan, startDelay);
+  // Weekly auto-suspend check
+  setTimeout(function weeklyCheck() { runWeeklySuspendCheck(); setTimeout(weeklyCheck, SUSPEND_CHECK_INTERVAL); }, SUSPEND_CHECK_INTERVAL);
   setTimeout(scheduledVintedScan, 60000);
 
   // Keep-alive ping every 10 minutes to prevent Render free tier sleep
