@@ -2262,6 +2262,48 @@ app.get('/scan-vinted', (req, res) => {
   runVintedScan();
 });
 
+// ── TELEGRAM COMMAND POLLING — module level so it always runs ──
+let lastTelegramUpdateId = 0;
+async function pollTelegramCommands() {
+  if (!TELEGRAM_TOKEN) return;
+  try {
+    const r = await fetch('https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/getUpdates?offset=' + (lastTelegramUpdateId + 1) + '&timeout=0');
+    const data = await r.json();
+    if (!data.ok || !data.result?.length) { setTimeout(pollTelegramCommands, 30000); return; }
+    for (const update of data.result) {
+      lastTelegramUpdateId = update.update_id;
+      const text = (update.message?.text || '').toLowerCase().trim();
+      if (!text) continue;
+      if (text === '/status' || text === '/s') {
+        const suspended = [...searchPerformance.entries()].filter(([,v]) => v.suspended).length;
+        const totalDeals = [...searchPerformance.values()].reduce((a,v) => a + v.totalDeals, 0);
+        const upMins = Math.round(process.uptime() / 60);
+        const msg = '📊 <b>FlipRadar Status</b>\n' +
+          '⏱ Uptime: ' + upMins + ' mins\n' +
+          '🔍 Queue: ' + QUEUE.length + ' searches\n' +
+          '⏸ Suspended: ' + suspended + ' searches\n' +
+          '✅ Deals this session: ' + totalDeals + '\n' +
+          '📧 Alerted IDs: ' + alertedIds.size + '\n' +
+          '👗 Vinted: ' + (global.vintedTokenValid ? 'Token valid ✅' : 'No token ❌') + '\n\n' +
+          'Commands: /status /scan /suspend';
+        await sendTelegram(msg);
+        console.log('[TELEGRAM] /status responded');
+      }
+      if (text === '/scan') {
+        await sendTelegram('🔄 Manual scan triggered...');
+        runEbayScan().catch(e => sendTelegram('❌ Scan error: ' + e.message));
+      }
+      if (text === '/suspend') {
+        const suspended = [...searchPerformance.entries()].filter(([,v]) => v.suspended).map(([q]) => q.substring(0,30));
+        const msg = suspended.length ? '⏸ <b>Suspended searches:</b>\n' + suspended.map(q => '• ' + q).join('\n') : '✅ No searches currently suspended.';
+        await sendTelegram(msg);
+      }
+    }
+  } catch(e) { console.log('[TELEGRAM POLL ERROR]', e.message); }
+  setTimeout(pollTelegramCommands, 30000);
+}
+setTimeout(pollTelegramCommands, 5000);
+
 app.listen(process.env.PORT || 3000, () => {
   console.log('FlipRadar bot running');
   console.log('Alert email: ' + (ALERT_EMAIL || 'NOT SET'));
@@ -2280,46 +2322,7 @@ app.listen(process.env.PORT || 3000, () => {
   setTimeout(scheduledScan, startDelay);
   // Weekly auto-suspend check
   setTimeout(function weeklyCheck() { runWeeklySuspendCheck(); setTimeout(weeklyCheck, SUSPEND_CHECK_INTERVAL); }, SUSPEND_CHECK_INTERVAL);
-  // Poll for Telegram commands every 30 seconds
-  let lastTelegramUpdateId = 0;
-  async function pollTelegramCommands() {
-    if (!TELEGRAM_TOKEN) return;
-    try {
-      const r = await fetch('https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/getUpdates?offset=' + (lastTelegramUpdateId + 1) + '&timeout=0');
-      const data = await r.json();
-      if (!data.ok || !data.result?.length) return;
-      for (const update of data.result) {
-        lastTelegramUpdateId = update.update_id;
-        const text = update.message?.text?.toLowerCase().trim();
-        if (!text) continue;
-        if (text === '/status' || text === '/s') {
-          const suspended = [...searchPerformance.entries()].filter(([,v]) => v.suspended).length;
-          const totalDeals = [...searchPerformance.values()].reduce((a,v) => a + v.totalDeals, 0);
-          const upMins = Math.round(process.uptime() / 60);
-          const msg = '📊 <b>FlipRadar Status</b>\n' +
-            '⏱ Uptime: ' + upMins + ' mins\n' +
-            '🔍 Queue: ' + QUEUE.length + ' searches\n' +
-            '⏸ Suspended: ' + suspended + ' searches\n' +
-            '✅ Deals found this session: ' + totalDeals + '\n' +
-            '📧 Alerted IDs tracked: ' + alertedIds.size + '\n' +
-            '👗 Vinted: ' + (global.vintedTokenValid ? 'Token valid' : 'No token') + '\n\n' +
-            'Commands: /status /scan /suspend';
-          await sendTelegram(msg);
-        }
-        if (text === '/scan') {
-          await sendTelegram('🔄 Manual scan triggered...');
-          runEbayScan().catch(e => sendTelegram('❌ Scan error: ' + e.message));
-        }
-        if (text === '/suspend') {
-          const suspended = [...searchPerformance.entries()].filter(([,v]) => v.suspended).map(([q]) => q.substring(0,30));
-          const msg = suspended.length ? '⏸ <b>Suspended searches:</b>\n' + suspended.map(q => '• ' + q).join('\n') : '✅ No searches currently suspended.';
-          await sendTelegram(msg);
-        }
-      }
-    } catch(e) { /* silent */ }
-    setTimeout(pollTelegramCommands, 30000);
-  }
-  setTimeout(pollTelegramCommands, 5000);
+  // Telegram polling started at module level below
   setTimeout(scheduledVintedScan, 60000);
 
   // Keep-alive ping every 10 minutes to prevent Render free tier sleep
