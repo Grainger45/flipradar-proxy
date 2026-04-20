@@ -1582,28 +1582,21 @@ async function runScan() {
       if (!candidates.length) continue;
 
       // ── CLAUDE SCORING — runs on EVERY candidate, no bypasses ──
-      // Every deal from every source must pass Claude appeal + condition check
       const isFootwear = ['trainers', 'boots'].includes(qItem.cat);
       const minCondScore = isFootwear ? MIN_CONDITION_FOOTWEAR : MIN_CONDITION_CLOTHING;
-      // Block undesirable sizes before expensive Claude scoring
-      const titleForSize = listing.title.toLowerCase();
-      const badSizes = [' xs ',' xs,',' xs)','size xs','uk 3 ','uk3 ','uk 3.','size 3 ','size 3.','uk 4 ','uk4 ',' size 4 ',' 4uk','(3)','(4)','eu 35','eu 36','eu 33','eu 34','toddler','infant','baby',' 2xl ',' 3xl ',' 4xl ',' 5xl ','xxl xxl'];
-      if (isFootwear && badSizes.some(s => titleForSize.includes(s))) { console.log('[SIZE-SKIP] ' + listing.title.substring(0,50)); continue; }
-      // For footwear searches, block clothing items that slip through category filter
-      if (isFootwear) {
-        const titleLow = listing.title.toLowerCase();
-        const clothingWords = ['dress','skirt','top','blouse','shirt','trousers','leggings','shorts','jeans','coat','jacket','hoodie','jumper','sweater','tracksuit','sweatshirt','t-shirt','tshirt','vest','bodysuit'];
-        if (clothingWords.some(w => titleLow.includes(w))) {
-          console.log('[BLOCKED-CATEGORY] Clothing in footwear search: ' + listing.title.substring(0,50));
-          continue;
-        }
-      }
+      const badSizes = [' xs ',' xs,',' xs)','size xs','uk 3 ','uk3 ','uk 3.','size 3 ','size 3.','uk 4 ','uk4 ',' size 4 ','(3)','(4)','eu 35','eu 36','eu 33','eu 34','toddler','infant','baby'];
+      const clothingWords = ['dress','skirt','blouse','trousers','leggings','shorts','jeans','coat','hoodie','jumper','sweater','tracksuit','sweatshirt','bodysuit'];
 
       candidates.sort((a, b) => b.roi - a.roi);
       const toScore = candidates.slice(0, 3);
 
       for (const deal of toScore) {
         try {
+          // Size filter — block XS and tiny sizes before Claude API call
+          const dealTitle = deal.title.toLowerCase();
+          if (isFootwear && badSizes.some(s => dealTitle.includes(s))) { console.log('[SIZE-SKIP] ' + deal.title.substring(0,50)); continue; }
+          // Clothing filter — block clothing words in footwear searches
+          if (isFootwear && clothingWords.some(w => dealTitle.includes(w))) { console.log('[BLOCKED-CATEGORY] ' + deal.title.substring(0,50)); continue; }
           // Always pass image — vision catches what titles miss
           const imageUrl = deal.image || null;
           const appeal = await scoreAppeal(deal.title, deal.brand, deal.cat, deal.condition, deal.price, imageUrl);
