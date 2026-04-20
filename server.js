@@ -347,15 +347,12 @@ const QUEUE = [
   {q:'Ralph Lauren polo shirt mens',brand:'Ralph Lauren',avgSell:30,minProfit:8,vintedQ:'Ralph Lauren polo mens',soldQ:'Ralph Lauren polo shirt mens',cat:'polo',catId:'57991'},
 
   // ═══ TIER 13: MORE TYPOS / ZERO COMPETITION ═══
-  {q:'Arcteryx jacket',brand:"Arc'teryx",avgSell:110,minProfit:35,vintedQ:"Arc'teryx jacket",soldQ:"Arc'teryx jacket",cat:'typo',catId:'57988'},
-  {q:'Arc terx jacket',brand:"Arc'teryx",avgSell:110,minProfit:35,vintedQ:"Arc'teryx jacket",soldQ:"Arc'teryx jacket",cat:'typo',catId:'57988'},
-  {q:'Patagona fleece',brand:'Patagonia',avgSell:65,minProfit:20,vintedQ:'Patagonia fleece',soldQ:'Patagonia fleece jacket',cat:'typo',catId:'57988'},
-  {q:'Nort Face jacket',brand:'North Face',avgSell:55,minProfit:18,vintedQ:'North Face jacket',soldQ:'North Face fleece jacket',cat:'typo',catId:'57988'},
+    {q:'Arc terx jacket',brand:"Arc'teryx",avgSell:110,minProfit:35,vintedQ:"Arc'teryx jacket",soldQ:"Arc'teryx jacket",cat:'typo',catId:'57988'},
+    {q:'Nort Face jacket',brand:'North Face',avgSell:55,minProfit:18,vintedQ:'North Face jacket',soldQ:'North Face fleece jacket',cat:'typo',catId:'57988'},
   {q:'Barbour barbour jacket',brand:'Barbour',avgSell:80,minProfit:25,vintedQ:'Barbour jacket',soldQ:'Barbour wax jacket',cat:'typo',catId:'57988'},
   {q:'Stoneisland jacket',brand:'Stone Island',avgSell:110,minProfit:35,vintedQ:'Stone Island jacket',soldQ:'Stone Island jacket',cat:'typo',catId:'57988'},
   {q:'Carharrt jacket',brand:'Carhartt WIP',avgSell:55,minProfit:18,vintedQ:'Carhartt WIP jacket',soldQ:'Carhartt WIP jacket',cat:'typo',catId:'57988'},
-  {q:'Lululemen leggings',brand:'Lululemon',avgSell:45,minProfit:15,vintedQ:'Lululemon leggings',soldQ:'Lululemon leggings womens',cat:'typo',catId:'15724'},
-  {q:'Adidas Samba trainers size',brand:'Adidas',avgSell:65,minProfit:18,vintedQ:'Adidas Samba',soldQ:'Adidas Samba trainers shoes',cat:'typo',catId:'15709'},
+    {q:'Adidas Samba trainers size',brand:'Adidas',avgSell:65,minProfit:18,vintedQ:'Adidas Samba',soldQ:'Adidas Samba trainers shoes',cat:'typo',catId:'15709'},
   {q:'Nike Air Force1 trainers',brand:'Nike',avgSell:55,minProfit:15,vintedQ:'Nike Air Force 1',soldQ:'Nike Air Force 1 trainers shoes',cat:'typo',catId:'15709'},
   {q:'Levis 501 jeans vintage',brand:"Levi's",avgSell:45,minProfit:15,vintedQ:"Levi's 501",soldQ:"Levi's 501 jeans mens",cat:'typo',catId:'15689'},
   {q:'Dr Martins 1460',brand:'Dr Martens',avgSell:80,minProfit:25,vintedQ:'Dr Martens 1460',soldQ:'Dr Martens 1460 boots',cat:'typo',catId:'62108'},
@@ -450,6 +447,7 @@ const REJECT_KIDS_SIZES = [
 let cachedToken = null;
 let tokenExpiry = 0;
 const alertedIds = new Set();
+const seenTitles = new Set(); // Dedup same item appearing in multiple searches
 
 // Status tracking
 const statusData = {
@@ -1255,7 +1253,7 @@ function setVintedToken(token, refreshToken) {
     }
     vintedTokenAlertSent = false;
     const minsLeft = Math.round((vintedTokenExpiry - Date.now()) / 60000);
-    console.log('Vinted: token set, valid for ' + minsLeft + ' mins' + (refreshToken ? ', auto-refresh enabled' : ''));
+    global.vintedTokenValid = true; console.log('Vinted: token set, valid for ' + minsLeft + ' mins' + (refreshToken ? ', auto-refresh enabled' : ''));
     return { ok: true, minsLeft, autoRefresh: !!refreshToken };
   } catch(e) {
     return { ok: false, error: 'Invalid JWT token format — make sure you copied access_token_web' };
@@ -1268,7 +1266,7 @@ async function scanVinted(targets) {
   const token = await getVintedToken();
 
   if (!token) {
-    console.log('Vinted: no valid token available');
+    global.vintedTokenValid = false; console.log('Vinted: no valid token available');
     return results;
   }
 
@@ -1587,6 +1585,19 @@ async function runScan() {
       // Every deal from every source must pass Claude appeal + condition check
       const isFootwear = ['trainers', 'boots'].includes(qItem.cat);
       const minCondScore = isFootwear ? MIN_CONDITION_FOOTWEAR : MIN_CONDITION_CLOTHING;
+      // Block undesirable sizes before expensive Claude scoring
+      const titleForSize = listing.title.toLowerCase();
+      const badSizes = [' xs ',' xs,',' xs)','size xs','uk 3 ','uk3 ','uk 3.','size 3 ','size 3.','uk 4 ','uk4 ',' size 4 ',' 4uk','(3)','(4)','eu 35','eu 36','eu 33','eu 34','toddler','infant','baby',' 2xl ',' 3xl ',' 4xl ',' 5xl ','xxl xxl'];
+      if (isFootwear && badSizes.some(s => titleForSize.includes(s))) { console.log('[SIZE-SKIP] ' + listing.title.substring(0,50)); continue; }
+      // For footwear searches, block clothing items that slip through category filter
+      if (isFootwear) {
+        const titleLow = listing.title.toLowerCase();
+        const clothingWords = ['dress','skirt','top','blouse','shirt','trousers','leggings','shorts','jeans','coat','jacket','hoodie','jumper','sweater','tracksuit','sweatshirt','t-shirt','tshirt','vest','bodysuit'];
+        if (clothingWords.some(w => titleLow.includes(w))) {
+          console.log('[BLOCKED-CATEGORY] Clothing in footwear search: ' + listing.title.substring(0,50));
+          continue;
+        }
+      }
 
       candidates.sort((a, b) => b.roi - a.roi);
       const toScore = candidates.slice(0, 3);
@@ -1621,6 +1632,7 @@ async function runScan() {
             alertDeals.push(deal);
             alertedIds.add(deal.id);
             recordDeal(qItem.q); // Track performance
+            seenTitles.add(deal.title.toLowerCase().replace(/[^a-z0-9]/g,'').substring(0,40));
             console.log('[' + deal.confidenceTier.toUpperCase() + '] ' + deal.title.substring(0, 45) + ' — £' + deal.price + ' (+£' + deal.vintedNet + ') A:' + appealScore + ' C:' + condScore);
           } else {
             console.log('[FILTERED] ' + deal.title.substring(0, 45) + ' — Appeal:' + appealScore + ' Cond:' + condScore + ' (min:' + minCondScore + ') — ' + (appealScore < 7 ? appeal.appealReason : appeal.conditionReason));
@@ -1854,6 +1866,7 @@ async function runScan() {
   }
 
   if (alertedIds.size > 800) alertedIds.clear();
+  seenTitles.clear(); // Reset per-scan dedup
   scanRunning = false;
 }
 
@@ -2274,6 +2287,46 @@ app.listen(process.env.PORT || 3000, () => {
   setTimeout(scheduledScan, startDelay);
   // Weekly auto-suspend check
   setTimeout(function weeklyCheck() { runWeeklySuspendCheck(); setTimeout(weeklyCheck, SUSPEND_CHECK_INTERVAL); }, SUSPEND_CHECK_INTERVAL);
+  // Poll for Telegram commands every 30 seconds
+  let lastTelegramUpdateId = 0;
+  async function pollTelegramCommands() {
+    if (!TELEGRAM_TOKEN) return;
+    try {
+      const r = await fetch('https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/getUpdates?offset=' + (lastTelegramUpdateId + 1) + '&timeout=0');
+      const data = await r.json();
+      if (!data.ok || !data.result?.length) return;
+      for (const update of data.result) {
+        lastTelegramUpdateId = update.update_id;
+        const text = update.message?.text?.toLowerCase().trim();
+        if (!text) continue;
+        if (text === '/status' || text === '/s') {
+          const suspended = [...searchPerformance.entries()].filter(([,v]) => v.suspended).length;
+          const totalDeals = [...searchPerformance.values()].reduce((a,v) => a + v.totalDeals, 0);
+          const upMins = Math.round(process.uptime() / 60);
+          const msg = '📊 <b>FlipRadar Status</b>\n' +
+            '⏱ Uptime: ' + upMins + ' mins\n' +
+            '🔍 Queue: ' + QUEUE.length + ' searches\n' +
+            '⏸ Suspended: ' + suspended + ' searches\n' +
+            '✅ Deals found this session: ' + totalDeals + '\n' +
+            '📧 Alerted IDs tracked: ' + alertedIds.size + '\n' +
+            '👗 Vinted: ' + (global.vintedTokenValid ? 'Token valid' : 'No token') + '\n\n' +
+            'Commands: /status /scan /suspend';
+          await sendTelegram(msg);
+        }
+        if (text === '/scan') {
+          await sendTelegram('🔄 Manual scan triggered...');
+          runEbayScan().catch(e => sendTelegram('❌ Scan error: ' + e.message));
+        }
+        if (text === '/suspend') {
+          const suspended = [...searchPerformance.entries()].filter(([,v]) => v.suspended).map(([q]) => q.substring(0,30));
+          const msg = suspended.length ? '⏸ <b>Suspended searches:</b>\n' + suspended.map(q => '• ' + q).join('\n') : '✅ No searches currently suspended.';
+          await sendTelegram(msg);
+        }
+      }
+    } catch(e) { /* silent */ }
+    setTimeout(pollTelegramCommands, 30000);
+  }
+  setTimeout(pollTelegramCommands, 5000);
   setTimeout(scheduledVintedScan, 60000);
 
   // Keep-alive ping every 10 minutes to prevent Render free tier sleep
