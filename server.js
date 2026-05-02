@@ -1,6 +1,6 @@
 // FlipRadar Pro - server.js
 // The definitive version. Real sold data. Auction sniping. Telegram alerts. No Vinted API.
-// ENV VARS: EBAY_APP_ID, ANTHROPIC_API_KEY, RESEND_API_KEY, ALERT_EMAIL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+// ENV VARS: EBAY_APP_ID, ANTHROPIC_API_KEY, RESEND_API_KEY, ALERT_EMAIL, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 
 const express = require('express');
 const https = require('https');
@@ -336,9 +336,9 @@ async function analyseWithClaude(deal) {
 
 // ── Telegram alert (instant, on your phone) ───────────────────
 async function sendTelegram(message) {
-  if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) return false;
+  if (!process.env.TELEGRAM_TOKEN || !process.env.TELEGRAM_CHAT_ID) return false;
   try {
-    const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
+    const url = `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`;
     const body = JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML' });
     const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
     return res.ok;
@@ -536,7 +536,7 @@ function scheduleScan() {
 app.get('/health', (_, res) => res.json({
   status: 'ok', version: 'FlipRadar Pro',
   alertEmail: ALERT_EMAIL,
-  telegramEnabled: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+  telegramEnabled: !!(process.env.TELEGRAM_TOKEN && process.env.TELEGRAM_CHAT_ID),
   emailReady: !!process.env.RESEND_API_KEY,
   maxBuyPrice: MAX_BUY, minProfit: MIN_PROFIT,
   queueSize: QUEUE.length, alertedSoFar: alertedCount,
@@ -559,7 +559,7 @@ app.get('/status', (_, res) => res.send(`
       <p><strong>Deals alerted:</strong> ${alertedCount}</p>
       <p><strong>Sold data cached:</strong> ${Object.keys(soldDataCache).length} search terms</p>
       <p><strong>Email:</strong> ${process.env.RESEND_API_KEY ? '✅ Resend' : '❌ Not configured'}</p>
-      <p><strong>Telegram:</strong> ${process.env.TELEGRAM_BOT_TOKEN ? '✅ Configured' : '⚠ Not configured (optional but recommended)'}</p>
+      <p><strong>Telegram:</strong> ${process.env.TELEGRAM_TOKEN ? '✅ Configured' : '⚠ Not configured (optional but recommended)'}</p>
     </div>
     ${lastDealsAlerted.length ? `
     <div class="card">
@@ -606,8 +606,8 @@ app.get('/test-email', async (req, res) => {
 });
 
 app.get('/test-telegram', async (req, res) => {
-  if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) {
-    return res.send('⚠️ Telegram not configured. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to Render env vars for instant phone alerts.');
+  if (!process.env.TELEGRAM_TOKEN || !process.env.TELEGRAM_CHAT_ID) {
+    return res.send('⚠️ Telegram not configured. Add TELEGRAM_TOKEN and TELEGRAM_CHAT_ID to Render env vars for instant phone alerts.');
   }
   const ok = await sendTelegram('✅ <b>FlipRadar Pro</b> — Telegram alerts are working! You\'ll get instant notifications when strong deals are found.');
   res.send(ok ? '✅ Telegram test sent — check your phone.' : '❌ Telegram failed — check bot token and chat ID.');
@@ -628,7 +628,7 @@ app.listen(PORT, () => {
   console.log(`FlipRadar Pro running on port ${PORT}`);
   console.log(`Config: max buy £${MAX_BUY}, min profit £${MIN_PROFIT}, scan every 2 mins`);
   console.log(`Email: ${process.env.RESEND_API_KEY ? 'Resend ✅' : '❌ Not configured'}`);
-  console.log(`Telegram: ${process.env.TELEGRAM_BOT_TOKEN ? '✅' : 'Not configured'}`);
+  console.log(`Telegram: ${process.env.TELEGRAM_TOKEN ? '✅' : 'Not configured'}`);
   console.log('Vinted API scanning: DISABLED');
   scheduleScan();
 });
