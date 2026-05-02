@@ -10,13 +10,23 @@ app.use(express.json());
 
 // ── Config ────────────────────────────────────────────────────
 const MAX_BUY = parseFloat(process.env.MAX_BUY_PRICE || '20');
-const MIN_PROFIT = parseFloat(process.env.MIN_PROFIT || '8');
+const MIN_PROFIT = parseFloat(process.env.MIN_PROFIT || '7');   // lowered from 8
 const POSTAGE = 3.50;
 const ALERT_EMAIL = process.env.ALERT_EMAIL || 'l.grainger1996@gmail.com';
 const SCAN_INTERVAL_MS = 2 * 60 * 1000; // scan every 2 minutes
 
+// Scoring gates — all deal quality rules in one place
+const MIN_APPEAL = 7;           // Claude appeal score minimum (0-10)
+const MIN_CONDITION = 7;        // Clothing condition minimum
+const MIN_CONDITION_FOOTWEAR = 8; // Footwear stricter
+const MIN_SOLD_SAMPLE = 3;      // Minimum real eBay sales required
+const MUST_BUY_SCORE = 70;      // Score threshold for Must Buy
+const STRONG_SCORE = 45;        // Score threshold for Strong Deal
+const SUSPEND_AFTER_DAYS = 14;  // Auto-suspend searches with no deals
+
 // ── State ─────────────────────────────────────────────────────
 let alertedIds = new Set();
+let seenTitles = new Set(); // deduplicate same item across searches
 let alertedCount = 0;
 let scanCount = 0;
 let lastScanTime = null;
@@ -113,6 +123,62 @@ async function getRealSoldData(query) {
   }
 }
 
+
+// ── Fuzzy brand matching — catches misspellings no other bot finds ──
+const BRAND_VARIANTS = {
+  'Patagonia':   ['patogonia','patagona','pategonia','pattagonia'],
+  'Carhartt':    ['carhart','carhatt','cahartt','carharrt'],
+  'North Face':  ['nort face','northface','norht face'],
+  "Arc'teryx":  ['arcteryx','arc terx','arctyrex'],
+  'Stone Island':['stoneisland','stone ilsand','stone iland'],
+  'Lululemon':   ['lululemen','lulemon','luluemon'],
+  'New Balance': ['new ballance','newbalance','new blance'],
+  'Dr Martens':  ['doc martens','doc martins','dr martins'],
+  'Salomon':     ['sallomon','salamon'],
+  "Levi's":      ['levis levi 501','levi501'],
+  'Ralph Lauren':['ralf lauren','ralph lauran'],
+  'Barbour':     ['barbour jakcet','barber jacket'],
+};
+function detectFuzzyBrand(title) {
+  const t = title.toLowerCase();
+  for (const [brand, variants] of Object.entries(BRAND_VARIANTS)) {
+    if (variants.some(v => t.includes(v))) return brand;
+  }
+  return null;
+}
+
+// ── Seller motivation detection ──
+const MOTIVATION_SIGNALS = ['moving house','need gone','must go','quick sale',
+  'clearing wardrobe','wardrobe clear','declutter','open to offers','never worn',
+  'unwanted gift','wrong size','house clearance','loft find','car boot'];
+function scoreMotivation(title, desc) {
+  const text = ((title||'') + ' ' + (desc||'')).toLowerCase();
+  return MOTIVATION_SIGNALS.filter(s => text.includes(s)).length;
+}
+
+// ── Search performance tracking — auto-suspend dead searches ──
+const searchPerf = new Map();
+function recordDeal(q) {
+  const p = searchPerf.get(q) || { lastDeal: null, totalDeals: 0, suspended: false };
+  p.lastDeal = new Date(); p.totalDeals++; p.suspended = false;
+  searchPerf.set(q, p);
+}
+function isSuspended(q) { return searchPerf.get(q)?.suspended || false; }
+async function weeklyCheck() {
+  const cutoff = Date.now() - (SUSPEND_AFTER_DAYS * 86400000);
+  const suspended = [];
+  for (const item of QUEUE) {
+    const p = searchPerf.get(item.q);
+    if (p && !p.suspended && p.lastDeal && p.lastDeal.getTime() < cutoff) {
+      p.suspended = true; searchPerf.set(item.q, p); suspended.push(item.q);
+    }
+  }
+  if (suspended.length) {
+    await sendTelegram('⏸ <b>Auto-suspended ' + suspended.length + ' searches</b> (no deals in ' + SUSPEND_AFTER_DAYS + ' days):\n' + suspended.slice(0,8).map(q=>'• '+q.substring(0,35)).join('\n'));
+    console.log('[AUTO-SUSPEND]', suspended.join(', '));
+  }
+}
+
 // ── Search queue ──────────────────────────────────────────────
 const QUEUE = [
   // Tier 1: Proven high-volume sellers
@@ -156,6 +222,32 @@ const QUEUE = [
   { q: 'vintage jacket loft find', soldQ: 'vintage jacket', brand: 'Various', cat: 'unknown' },
   { q: 'branded jacket house clearance', soldQ: 'branded jacket vintage', brand: 'Various', cat: 'unknown' },
   { q: 'retro ski jacket vintage colourful', soldQ: 'vintage ski jacket', brand: 'Various', cat: 'vintage' },
+
+  // Tier 6: High-value outerwear
+  { q: 'Stone Island jacket', soldQ: 'Stone Island jacket', brand: 'Stone Island', cat: 'premium' },
+  { q: 'CP Company jacket', soldQ: 'CP Company jacket', brand: 'CP Company', cat: 'premium' },
+  { q: 'Moncler jacket', soldQ: 'Moncler jacket', brand: 'Moncler', cat: 'premium' },
+  { q: 'Canada Goose jacket', soldQ: 'Canada Goose jacket', brand: 'Canada Goose', cat: 'premium' },
+  { q: 'Arcteryx jacket', soldQ: "Arc'teryx jacket", brand: "Arc'teryx", cat: 'outdoor' },
+  { q: 'Fjallraven jacket', soldQ: 'Fjallraven jacket', brand: 'Fjallraven', cat: 'outdoor' },
+  { q: 'Napapijri jacket', soldQ: 'Napapijri jacket', brand: 'Napapijri', cat: 'outdoor' },
+
+  // Tier 7: Trainers
+  { q: 'Adidas Samba trainers', soldQ: 'Adidas Samba trainers', brand: 'Adidas', cat: 'trainers' },
+  { q: 'Nike Air Force 1 trainers', soldQ: 'Nike Air Force 1 trainers', brand: 'Nike', cat: 'trainers' },
+  { q: 'New Balance 550 trainers', soldQ: 'New Balance 550 trainers', brand: 'New Balance', cat: 'trainers' },
+  { q: 'Salomon trainers', soldQ: 'Salomon trail trainers', brand: 'Salomon', cat: 'trainers' },
+  { q: 'Veja trainers', soldQ: 'Veja trainers', brand: 'Veja', cat: 'trainers' },
+  { q: 'Dr Martens boots', soldQ: 'Dr Martens 1460 boots', brand: 'Dr Martens', cat: 'boots' },
+
+  // Tier 8: More misspellings
+  { q: 'Carhart jacket', soldQ: 'Carhartt jacket', brand: 'Carhartt', cat: 'typo' },
+  { q: 'Arcterx jacket', soldQ: "Arc'teryx jacket", brand: "Arc'teryx", cat: 'typo' },
+  { q: 'Lululemen leggings', soldQ: 'Lululemon leggings womens', brand: 'Lululemon', cat: 'typo' },
+  { q: 'New Ballance trainers', soldQ: 'New Balance trainers', brand: 'New Balance', cat: 'typo' },
+  { q: 'Doc Martins boots', soldQ: 'Dr Martens boots', brand: 'Dr Martens', cat: 'typo' },
+  { q: 'Sallomon trainers', soldQ: 'Salomon trainers', brand: 'Salomon', cat: 'typo' },
+  { q: 'Ralf Lauren polo', soldQ: 'Ralph Lauren polo shirt', brand: 'Ralph Lauren', cat: 'typo' },
 ];
 
 // ── eBay search (Buy It Now) ───────────────────────────────────
@@ -284,8 +376,14 @@ function processItems(items, queueItem, soldData, listingType) {
       if (freeShipping) score += 5;
       if (listingType === 'Auction' && bidCount === 0) score += 15; // no bids = opportunity
 
-      if (score >= 70) tier = 'mustbuy';
-      else if (score >= 45) tier = 'strong';
+      // Fuzzy brand match bonus
+      const fuzzyBrand = detectFuzzyBrand(title);
+      if (fuzzyBrand) score += 8;
+      // Seller motivation bonus
+      const motivScore = scoreMotivation(title, '');
+      if (motivScore > 0) score += motivScore * 3;
+      if (score >= MUST_BUY_SCORE) tier = 'mustbuy';
+      else if (score >= STRONG_SCORE) tier = 'strong';
 
       // Calculate auction urgency
       let hoursLeft = null;
@@ -453,6 +551,7 @@ async function runScan() {
   const newDeals = [];
 
   for (const item of batch) {
+    if (isSuspended(item.q)) { console.log('[SUSPENDED]', item.q.substring(0,40)); continue; }
     try {
       // Get real sold data
       const soldData = await getRealSoldData(item.soldQ);
@@ -479,12 +578,14 @@ async function runScan() {
   scanCount++;
   lastScanTime = new Date();
 
-  // Deduplicate
+  // Deduplicate by ID and normalised title
+  seenTitles.clear();
   const uniqueDeals = [];
   const seenInBatch = new Set();
   for (const deal of newDeals) {
-    if (!seenInBatch.has(deal.id)) {
-      seenInBatch.add(deal.id);
+    const normTitle = deal.title.toLowerCase().replace(/[^a-z0-9]/g,'').substring(0,40);
+    if (!seenInBatch.has(deal.id) && !seenTitles.has(normTitle)) {
+      seenInBatch.add(deal.id); seenTitles.add(normTitle);
       uniqueDeals.push(deal);
     }
   }
@@ -506,7 +607,7 @@ async function runScan() {
       deal.analysis = await analyseWithClaude(deal);
     }
 
-    alertDeals.forEach(d => alertedIds.add(d.id));
+    alertDeals.forEach(d => { alertedIds.add(d.id); recordDeal(d.cat || d.brand); });
     alertedCount += alertDeals.length;
     lastDealsAlerted = alertDeals.slice(0, 5).map(d =>
       `${d.title} (Buy £${d.price} → +£${d.bestNet.toFixed(0)} profit, ${d.roi}% ROI)`
@@ -622,6 +723,23 @@ app.get('/sold-data', async (req, res) => {
 
 app.get('/ping', (_, res) => res.send('pong'));
 
+// Vinted token paste endpoint
+let vintedToken = null;
+app.post('/refresh-token', (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: 'No token provided' });
+  vintedToken = token;
+  console.log('Vinted token set manually');
+  res.json({ ok: true, message: 'Vinted token set' });
+});
+app.get('/refresh-token', (_, res) => res.send(`
+  <html><body style="font-family:sans-serif;max-width:400px;margin:40px auto;padding:20px;">
+  <h3>Set Vinted Token</h3>
+  <textarea id="t" style="width:100%;height:80px;"></textarea><br><br>
+  <button onclick="fetch('/refresh-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:document.getElementById('t').value})}).then(r=>r.json()).then(d=>alert(d.message))">Set Token</button>
+  </body></html>
+`));
+
 // ── Start ──────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
@@ -631,4 +749,31 @@ app.listen(PORT, () => {
   console.log(`Telegram: ${process.env.TELEGRAM_TOKEN ? '✅' : 'Not configured'}`);
   console.log('Vinted API scanning: DISABLED');
   scheduleScan();
+  // Weekly auto-suspend check
+  setInterval(weeklyCheck, 7 * 24 * 60 * 60 * 1000);
+  // Telegram command polling
+  let lastUpdateId = 0;
+  async function pollTelegram() {
+    if (!process.env.TELEGRAM_TOKEN) return;
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId+1}&timeout=0`);
+      const d = await r.json();
+      if (!d.ok || !d.result?.length) return;
+      for (const u of d.result) {
+        lastUpdateId = u.update_id;
+        const text = (u.message?.text||'').toLowerCase().trim();
+        if (text === '/status' || text === '/s') {
+          const suspended = [...searchPerf.values()].filter(p=>p.suspended).length;
+          await sendTelegram('📊 <b>FlipRadar Status</b>\n⏱ Uptime: '+Math.round(process.uptime()/60)+'m\n🔍 Queue: '+QUEUE.length+' searches\n⏸ Suspended: '+suspended+'\n✅ Deals alerted: '+alertedCount+'\n\nCommands: /status /scan /suspend');
+        }
+        if (text === '/scan') { await sendTelegram('🔄 Scan triggered...'); runScan().catch(()=>{}); }
+        if (text === '/suspend') {
+          const s = [...searchPerf.entries()].filter(([,v])=>v.suspended).map(([q])=>q.substring(0,30));
+          await sendTelegram(s.length ? '⏸ Suspended:\n'+s.map(q=>'• '+q).join('\n') : '✅ No suspended searches.');
+        }
+      }
+    } catch(e) {}
+    setTimeout(pollTelegram, 30000);
+  }
+  setTimeout(pollTelegram, 5000);
 });
