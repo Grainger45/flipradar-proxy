@@ -77,8 +77,8 @@ async function getRealSoldData(query) {
       'sortOrder': 'EndTimeSoonest'
     });
 
-    const data = await fetchUrl(`https://svcs.ebay.com/services/search/FindingService/v1?${params}`);
-    const parsed = JSON.parse(data);
+    const rawData = await fetchUrl(`https://svcs.ebay.com/services/search/FindingService/v1?${params}`);
+    const parsed = JSON.parse(rawData);
     const items = parsed?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
 
     const prices = items
