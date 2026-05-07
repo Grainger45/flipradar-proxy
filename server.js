@@ -34,6 +34,7 @@ let lastScanTime = null;
 let lastDealsAlerted = [];
 let recentDeals = []; // last 50 deals for dashboard
 let soldDataCache = {}; // cache real sold prices per search term
+let purchaseLog = []; // track what you buy and sell for profit analysis
 
 // ── Fetch helper ──────────────────────────────────────────────
 function fetchUrl(url, options = {}) {
@@ -146,6 +147,55 @@ async function getRealSoldData(query) {
 
 
 // ── Fuzzy brand matching — catches misspellings no other bot finds ──
+// ── Sell velocity — estimated days to sell per brand ──────────
+// Based on typical Vinted UK sell-through rates
+const SELL_VELOCITY = {
+  'Nike': { speed: 'Quick', days: 3, label: '🟢 Quick seller (avg 3 days)' },
+  'Adidas': { speed: 'Quick', days: 4, label: '🟢 Quick seller (avg 4 days)' },
+  "Levi's": { speed: 'Quick', days: 5, label: '🟢 Quick seller (avg 5 days)' },
+  'Ralph Lauren': { speed: 'Quick', days: 4, label: '🟢 Quick seller (avg 4 days)' },
+  'Stone Island': { speed: 'Quick', days: 3, label: '🟢 Quick seller (avg 3 days)' },
+  'CP Company': { speed: 'Quick', days: 4, label: '🟢 Quick seller (avg 4 days)' },
+  'Carhartt': { speed: 'Quick', days: 5, label: '🟢 Quick seller (avg 5 days)' },
+  'Champion': { speed: 'Consistent', days: 7, label: '🟡 Consistent seller (avg 7 days)' },
+  'Tommy Hilfiger': { speed: 'Consistent', days: 7, label: '🟡 Consistent seller (avg 7 days)' },
+  'Lacoste': { speed: 'Consistent', days: 7, label: '🟡 Consistent seller (avg 7 days)' },
+  'Barbour': { speed: 'Consistent', days: 10, label: '🟡 Consistent seller (avg 10 days)' },
+  'North Face': { speed: 'Consistent', days: 8, label: '🟡 Consistent seller (avg 8 days)' },
+  'Patagonia': { speed: 'Consistent', days: 10, label: '🟡 Consistent seller (avg 10 days)' },
+  'New Balance': { speed: 'Quick', days: 4, label: '🟢 Quick seller (avg 4 days)' },
+  'Salomon': { speed: 'Quick', days: 5, label: '🟢 Quick seller (avg 5 days)' },
+  'Veja': { speed: 'Consistent', days: 8, label: '🟡 Consistent seller (avg 8 days)' },
+  'Dr Martens': { speed: 'Consistent', days: 9, label: '🟡 Consistent seller (avg 9 days)' },
+  'Moncler': { speed: 'Slow', days: 21, label: '🔴 Slow seller (avg 21 days) — high value' },
+  'Canada Goose': { speed: 'Slow', days: 25, label: '🔴 Slow seller (avg 25 days) — high value' },
+  "Arc'teryx": { speed: 'Slow', days: 18, label: '🔴 Slow seller (avg 18 days) — niche' },
+  'Fjallraven': { speed: 'Slow', days: 20, label: '🔴 Slow seller (avg 20 days)' },
+  'Football': { speed: 'Consistent', days: 10, label: '🟡 Consistent seller (avg 10 days)' },
+};
+function getSellVelocity(brand) {
+  return SELL_VELOCITY[brand] || { speed: 'Unknown', days: null, label: '⚪ Unknown sell speed' };
+}
+
+// ── Seasonal weighting — boost/suppress by time of year ────────
+function getSeasonalMultiplier(brand, cat) {
+  const month = new Date().getMonth(); // 0=Jan, 11=Dec
+  const isWinter = month >= 9 || month <= 1; // Oct-Feb
+  const isSummer = month >= 5 && month <= 8; // Jun-Sep
+  // Winter outerwear — premium in Oct-Feb, depressed in Jun-Sep
+  const winterBrands = ['Barbour', 'Canada Goose', 'Moncler', 'North Face', 'Patagonia', "Arc'teryx", 'Fjallraven', 'Napapijri'];
+  if (winterBrands.includes(brand) || cat === 'outdoor') {
+    if (isWinter) return 1.15; // 15% value boost in winter
+    if (isSummer) return 0.80; // 20% value reduction in summer
+  }
+  // Football shirts — peak Aug-May (season), low Jun-Jul
+  if (cat === 'football') {
+    if (month >= 7 || month <= 4) return 1.10;
+    return 0.85;
+  }
+  return 1.0;
+}
+
 const BRAND_VARIANTS = {
   'Patagonia':   ['patogonia','patagona','pategonia','pattagonia'],
   'Carhartt':    ['carhart','carhatt','cahartt','carharrt'],
@@ -269,7 +319,111 @@ const QUEUE = [
   { q: 'Doc Martins boots', soldQ: 'Dr Martens boots', brand: 'Dr Martens', cat: 'typo' },
   { q: 'Sallomon trainers', soldQ: 'Salomon trainers', brand: 'Salomon', cat: 'typo' },
   { q: 'Ralf Lauren polo', soldQ: 'Ralph Lauren polo shirt', brand: 'Ralph Lauren', cat: 'typo' },
+
+  // Tier 9: High-value missing brands
+  { q: 'Helly Hansen jacket', soldQ: 'Helly Hansen jacket mens', brand: 'Helly Hansen', cat: 'outdoor' },
+  { q: 'Fred Perry polo shirt', soldQ: 'Fred Perry polo shirt mens', brand: 'Fred Perry', cat: 'polo' },
+  { q: 'Ellesse vintage jacket', soldQ: 'Ellesse vintage jacket', brand: 'Ellesse', cat: 'vintage' },
+  { q: 'Fila vintage tracksuit top', soldQ: 'Fila vintage jacket', brand: 'Fila', cat: 'vintage' },
+  { q: 'Adidas Originals jacket vintage', soldQ: 'Adidas Originals jacket', brand: 'Adidas', cat: 'adidas' },
+  { q: 'Nike ACG jacket', soldQ: 'Nike ACG jacket', brand: 'Nike', cat: 'nike' },
+  { q: 'Burberry shirt mens', soldQ: 'Burberry shirt mens', brand: 'Burberry', cat: 'premium' },
+  { q: 'Barbour gilet quilted', soldQ: 'Barbour gilet', brand: 'Barbour', cat: 'outdoor' },
+  { q: 'Lululemon align leggings', soldQ: 'Lululemon align leggings womens', brand: 'Lululemon', cat: 'activewear' },
+  { q: 'Sweaty Betty leggings', soldQ: 'Sweaty Betty leggings womens', brand: 'Sweaty Betty', cat: 'activewear' },
+  { q: 'Polo Ralph Lauren shirt Oxford', soldQ: 'Polo Ralph Lauren Oxford shirt', brand: 'Ralph Lauren', cat: 'polo' },
+  { q: 'Nike Dunk trainers', soldQ: 'Nike Dunk trainers shoes', brand: 'Nike', cat: 'trainers' },
+  { q: 'Asics Gel Kayano trainers', soldQ: 'Asics Gel Kayano trainers', brand: 'Asics', cat: 'trainers' },
+  { q: 'On Cloud trainers', soldQ: 'On Cloud running shoes trainers', brand: 'On', cat: 'trainers' },
+
+  // Tier 10: More typos
+  { q: 'Helly Hanson jacket', soldQ: 'Helly Hansen jacket', brand: 'Helly Hansen', cat: 'typo' },
+  { q: 'Feeed Perry polo', soldQ: 'Fred Perry polo shirt', brand: 'Fred Perry', cat: 'typo' },
+  { q: 'Nort Face jacket', soldQ: 'North Face fleece jacket', brand: 'North Face', cat: 'typo' },
+  { q: 'Patogonia fleece jacket', soldQ: 'Patagonia fleece pullover', brand: 'Patagonia', cat: 'typo' },
 ];
+
+// ── Oxfam scanning — uncontested source, no other bot scans this ──
+const OXFAM_SEARCHES = [
+  { term: 'barbour jacket', brand: 'Barbour', avgSell: 85, cat: 'outdoor' },
+  { term: 'stone island jacket', brand: 'Stone Island', avgSell: 110, cat: 'premium' },
+  { term: 'patagonia fleece', brand: 'Patagonia', avgSell: 55, cat: 'outdoor' },
+  { term: 'north face jacket', brand: 'North Face', avgSell: 45, cat: 'outdoor' },
+  { term: 'ralph lauren jacket', brand: 'Ralph Lauren', avgSell: 40, cat: 'polo' },
+  { term: 'dr martens boots', brand: 'Dr Martens', avgSell: 65, cat: 'boots' },
+  { term: 'new balance trainers', brand: 'New Balance', avgSell: 65, cat: 'trainers' },
+  { term: 'levi jeans', brand: "Levi's", avgSell: 35, cat: 'jeans' },
+  { term: 'carhartt jacket', brand: 'Carhartt', avgSell: 55, cat: 'workwear' },
+  { term: 'cp company jacket', brand: 'CP Company', avgSell: 90, cat: 'premium' },
+  { term: 'fjallraven jacket', brand: 'Fjallraven', avgSell: 65, cat: 'outdoor' },
+  { term: 'moncler jacket', brand: 'Moncler', avgSell: 180, cat: 'premium' },
+  { term: 'canada goose jacket', brand: 'Canada Goose', avgSell: 220, cat: 'premium' },
+  { term: 'burberry coat', brand: 'Burberry', avgSell: 120, cat: 'premium' },
+  { term: 'salomon trainers', brand: 'Salomon', avgSell: 80, cat: 'trainers' },
+  { term: 'adidas samba', brand: 'Adidas', avgSell: 65, cat: 'trainers' },
+  { term: 'nike air force', brand: 'Nike', avgSell: 55, cat: 'trainers' },
+  { term: 'veja trainers', brand: 'Veja', avgSell: 75, cat: 'trainers' },
+];
+
+async function scanOxfam() {
+  const deals = [];
+  for (const search of OXFAM_SEARCHES) {
+    try {
+      const url = `https://onlineshop.oxfam.org.uk/search?q=${encodeURIComponent(search.term)}&start=0&sz=20`;
+      const html = await fetchUrl(url);
+      // Parse product tiles from Oxfam's Salesforce Commerce Cloud HTML
+      const priceMatches = [...html.matchAll(/class="[^"]*price[^"]*"[^>]*>[\s\S]*?£([\d.]+)/g)];
+      const titleMatches = [...html.matchAll(/class="[^"]*product-name[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/g)];
+      const urlMatches   = [...html.matchAll(/href="(\/[^"]*\/product\/[^"]+)"/g)];
+      const imgMatches   = [...html.matchAll(/data-src="([^"]*onlineshop\.oxfam[^"]*\.jpg[^"]*)"/g)];
+
+      for (let i = 0; i < Math.min(priceMatches.length, titleMatches.length); i++) {
+        const price = parseFloat(priceMatches[i]?.[1] || '0');
+        const title = (titleMatches[i]?.[1] || '').replace(/<[^>]+>/g,'').trim();
+        const itemUrl = urlMatches[i] ? 'https://onlineshop.oxfam.org.uk' + urlMatches[i][1] : '';
+        const image = imgMatches[i]?.[1] || '';
+        if (!price || price > MAX_BUY || !title) continue;
+
+        const seasonal = getSeasonalMultiplier(search.brand, search.cat);
+        const adjustedSell = search.avgSell * seasonal;
+        const net = Math.round((adjustedSell * 0.85 - price - POSTAGE) * 100) / 100;
+        if (net < MIN_PROFIT) continue;
+
+        const marketPercent = Math.round((price / adjustedSell) * 100);
+        const roi = Math.round((net / price) * 100);
+        let score = 0;
+        if (marketPercent <= 30) score += 50;
+        else if (marketPercent <= 45) score += 40;
+        else if (marketPercent <= 60) score += 28;
+        else if (marketPercent <= 75) score += 15;
+        if (roi >= 150) score += 25;
+        else if (roi >= 100) score += 18;
+        else if (roi >= 60) score += 10;
+        score += 10; // Oxfam bonus — uncontested source
+
+        const tier = score >= MUST_BUY_SCORE ? 'mustbuy' : score >= STRONG_SCORE ? 'strong' : 'possible';
+        if (tier === 'possible') continue;
+
+        const velocity = getSellVelocity(search.brand);
+        deals.push({
+          id: 'oxfam_' + Buffer.from(itemUrl).toString('base64').substring(0,20),
+          title, price, url: itemUrl, image,
+          brand: search.brand, cat: search.cat,
+          vintedListPrice: Math.round(adjustedSell * 0.85),
+          ebayListPrice: Math.round(adjustedSell * 0.9),
+          vintedNet: net, ebayNet: net, bestNet: net, netProfit: net,
+          bestPlatform: 'Vinted', roi, confidenceTier: tier, score,
+          marketPercent,
+          soldData: { median: adjustedSell, sampleSize: 0, low: 0, high: 0 },
+          isAuction: false, bidCount: 0, hoursLeft: null, freeShipping: false,
+          source: 'Oxfam', listingType: 'BIN', velocity
+        });
+      }
+      await sleep(800);
+    } catch(e) { console.error('Oxfam scan error:', e.message); }
+  }
+  return deals;
+}
 
 // ── eBay search (Buy It Now) — Browse API ────────────────────
 async function searchEbayBIN(item, soldData) {
@@ -358,9 +512,11 @@ function processBrowseItems(items, queueItem, soldData, listingType) {
       const bidCount = parseInt(ebayItem.bidCount || '0');
       const freeShipping = ebayItem.shippingOptions?.[0]?.shippingCostType === 'FREE';
 
-      // Calculate real profit using actual sold data
-      const vintedTarget = Math.round(soldData.median * 0.85); // list slightly below median
-      const ebayTarget = Math.round(soldData.median * 0.9);
+      // Calculate real profit using actual sold data + seasonal adjustment
+      const seasonal = getSeasonalMultiplier(queueItem.brand, queueItem.cat);
+      const adjustedMedian = soldData.median * seasonal;
+      const vintedTarget = Math.round(adjustedMedian * 0.85); // list slightly below median
+      const ebayTarget = Math.round(adjustedMedian * 0.9);
       const vintedNet = Math.round((vintedTarget - price - POSTAGE) * 100) / 100;
       const ebayNet = Math.round(((ebayTarget * 0.87) - price - POSTAGE) * 100) / 100;
       const bestNet = Math.max(vintedNet, ebayNet);
@@ -405,9 +561,11 @@ function processBrowseItems(items, queueItem, soldData, listingType) {
         hoursLeft = Math.round((new Date(endDate) - Date.now()) / 3600000 * 10) / 10;
       }
 
+      const velocity = getSellVelocity(queueItem.brand);
       deals.push({
         id: itemId, title, price, url, image,
         brand: queueItem.brand, cat: queueItem.cat,
+        velocity,
         vintedListPrice: vintedTarget,
         ebayListPrice: ebayTarget,
         vintedNet, ebayNet, bestNet, netProfit: bestNet,
@@ -451,10 +609,20 @@ async function sendTelegram(message) {
   if (!process.env.TELEGRAM_TOKEN || !process.env.TELEGRAM_CHAT_ID) return false;
   try {
     const url = `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`;
-    const body = JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML' });
+    const body = JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: false });
     const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
     return res.ok;
   } catch(e) { return false; }
+}
+
+async function sendTelegramPhoto(imageUrl, caption) {
+  if (!process.env.TELEGRAM_TOKEN || !process.env.TELEGRAM_CHAT_ID || !imageUrl) return false;
+  try {
+    const url = `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendPhoto`;
+    const body = JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, photo: imageUrl, caption, parse_mode: 'HTML' });
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    return res.ok;
+  } catch(e) { return sendTelegram(caption); } // fallback to text
 }
 
 // ── Email ─────────────────────────────────────────────────────
@@ -487,14 +655,24 @@ async function sendDealAlert(deals) {
 📈 Sell on ${d.bestPlatform}: <b>£${d.bestPlatform === 'Vinted' ? d.vintedListPrice : d.ebayListPrice}</b>
 ✅ Net profit: <b>+£${d.bestNet.toFixed(0)}</b> (${d.roi}% ROI)
 📊 Market median: £${d.soldData.median} (${d.soldData.sampleSize} real sales)
-💡 Buying at ${d.marketPercent}% of market value${urgency}
+💡 Buying at ${d.marketPercent}% of market value
+${d.velocity ? d.velocity.label : ''}${urgency}
 ${d.analysis ? `\n🤖 ${d.analysis}` : ''}
 
 <a href="${d.url}">👉 View on eBay</a>`;
 
-    await sendTelegram(msg);
+    // Send photo for must-buys, text for strong deals
+    if (d.image && d.confidenceTier === 'mustbuy') {
+      await sendTelegramPhoto(d.image, msg);
+    } else {
+      await sendTelegram(msg);
+    }
     await sleep(500);
   }
+
+  // Email must-buys only — strong deals go to Telegram only
+  const mustBuyDeals = deals.filter(d => d.confidenceTier === 'mustbuy');
+  if (mustBuyDeals.length === 0) { console.log('Strong deals only — Telegram sent, no email'); return; }
 
   // Email digest
   const cards = mustBuyDeals.map(d => `
@@ -528,18 +706,15 @@ ${d.analysis ? `\n🤖 ${d.analysis}` : ''}
               <div style="font-size:18px;font-weight:700;color:#2563eb;">${d.roi}%</div>
             </div>
           </div>
+          ${d.velocity ? `<p style="font-size:12px;color:#6b7280;margin:0 0 8px;">${d.velocity.label}</p>` : ''}
           ${d.analysis ? `<p style="font-size:13px;color:#374151;font-style:italic;margin:0 0 12px;">🤖 ${d.analysis}</p>` : ''}
           <div style="display:flex;gap:8px;">
-            <a href="${d.url}" style="background:#111;color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;">View on eBay →</a>
+            <a href="${d.url}" style="background:#111;color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;">View on ${d.source || 'eBay'} →</a>
             <a href="https://www.vinted.co.uk/catalog?search_text=${encodeURIComponent(d.title)}&order=newest_first" style="background:#EAF3DE;color:#3B6D11;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;">Check Vinted →</a>
           </div>
         </div>
       </div>
     </div>`).join('');
-
-  // Email must-buys only — strong deals go to Telegram only
-  const mustBuyDeals = deals.filter(d => d.confidenceTier === 'mustbuy');
-  if (mustBuyDeals.length === 0) { console.log('Strong deals only — Telegram sent, no email'); return; }
 
   await sendEmail(
     `🔥 FlipRadar: ${mustBuyDeals.length} must-buy deal${mustBuyDeals.length>1?'s':''} — ${new Date().toLocaleString('en-GB')}`,
@@ -559,14 +734,27 @@ async function runScan() {
   const startTime = Date.now();
   console.log(`[${new Date().toISOString()}] Scanning... (batch ${scanCount + 1})`);
 
-  // Process 4 items per scan (rotate through queue)
-  const batch = [];
-  for (let i = 0; i < 6; i++) {
-    batch.push(QUEUE[(qIdx + i) % QUEUE.length]);
-  }
-  qIdx = (qIdx + 4) % QUEUE.length;
+  // Smart rotation — 8 items per scan, mixing sequential + random for full coverage
+  // At 8 items/scan every 2 mins = ~240 items/hour, well within 5000/day eBay limit
+  const batchSet = new Set();
+  for (let i = 0; i < 6; i++) batchSet.add(QUEUE[(qIdx + i) % QUEUE.length]);
+  qIdx = (qIdx + 6) % QUEUE.length;
+  const shuffled = [...QUEUE].sort(() => Math.random() - 0.5);
+  for (const item of shuffled) { if (batchSet.size >= 10) break; batchSet.add(item); }
+  const batch = [...batchSet];
 
   const newDeals = [];
+
+  // Scan Oxfam every 10th scan (~20 mins) — uncontested source
+  if (scanCount % 10 === 0) {
+    try {
+      const oxfamDeals = await scanOxfam();
+      for (const deal of oxfamDeals) {
+        if (!alertedIds.has(deal.id) || (Date.now() - alertedIds.get(deal.id)) > ALERT_COOLDOWN_MS) newDeals.push(deal);
+      }
+      if (oxfamDeals.length) console.log(`Oxfam: ${oxfamDeals.length} candidates found`);
+    } catch(e) { console.error('Oxfam scan failed:', e.message); }
+  }
 
   for (const item of batch) {
     if (isSuspended(item.q)) { console.log('[SUSPENDED]', item.q.substring(0,40)); continue; }
@@ -788,6 +976,46 @@ app.listen(PORT, () => {
         if (text === '/suspend') {
           const s = [...searchPerf.entries()].filter(([,v])=>v.suspended).map(([q])=>q.substring(0,30));
           await sendTelegram(s.length ? '⏸ Suspended:\n'+s.map(q=>'• '+q).join('\n') : '✅ No suspended searches.');
+        }
+        if (text.startsWith('/bought')) {
+          const parts = text.replace('/bought','').trim().split(' ');
+          const buyPrice = parseFloat(parts[0]) || 0;
+          const item = parts.slice(1).join(' ') || 'unknown';
+          if (buyPrice > 0) {
+            purchaseLog.push({ item, buyPrice, boughtAt: new Date().toISOString(), soldPrice: null });
+            await sendTelegram(`✅ Logged purchase: <b>${item}</b> for £${buyPrice}\nUse /sold ${buyPrice} [sell price] to log the sale.`);
+          } else {
+            await sendTelegram('Usage: /bought [price] [item name]\nExample: /bought 15 Levi 501 jeans');
+          }
+        }
+        if (text.startsWith('/sold')) {
+          const parts = text.replace('/sold','').trim().split(' ');
+          const buyPrice = parseFloat(parts[0]) || 0;
+          const sellPrice = parseFloat(parts[1]) || 0;
+          if (buyPrice > 0 && sellPrice > 0) {
+            const entry = purchaseLog.find(p => p.buyPrice === buyPrice && !p.soldPrice);
+            if (entry) {
+              entry.soldPrice = sellPrice;
+              entry.soldAt = new Date().toISOString();
+              const profit = sellPrice - buyPrice - 3.50;
+              const roi = Math.round((profit / buyPrice) * 100);
+              await sendTelegram(`💰 Sale logged!\n📦 Item: <b>${entry.item}</b>\n💸 Bought: £${buyPrice} → Sold: £${sellPrice}\n✅ Profit: <b>+£${profit.toFixed(2)}</b> (${roi}% ROI)`);
+            } else {
+              await sendTelegram('No matching purchase found. Use /log to see purchase history.');
+            }
+          } else {
+            await sendTelegram('Usage: /sold [buy price] [sell price]\nExample: /sold 15 45');
+          }
+        }
+        if (text === '/log' || text === '/history') {
+          if (!purchaseLog.length) { await sendTelegram('No purchases logged yet. Use /bought to log a purchase.'); }
+          else {
+            const totalProfit = purchaseLog.filter(p=>p.soldPrice).reduce((a,p)=>a+(p.soldPrice-p.buyPrice-3.5),0);
+            const msg = '📊 <b>Purchase Log</b>\n\n' +
+              purchaseLog.slice(-10).map(p => `• <b>${p.item}</b> — Bought £${p.buyPrice}${p.soldPrice ? ` → Sold £${p.soldPrice} (+£${(p.soldPrice-p.buyPrice-3.5).toFixed(0)})` : ' (unsold)'}`).join('\n') +
+              `\n\n💰 Total profit: <b>£${totalProfit.toFixed(2)}</b>`;
+            await sendTelegram(msg);
+          }
         }
       }
     } catch(e) {}
