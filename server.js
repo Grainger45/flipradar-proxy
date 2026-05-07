@@ -74,7 +74,7 @@ async function getRealSoldData(query) {
     const params = new URLSearchParams({
       'OPERATION-NAME': 'findCompletedItems',
       'SERVICE-VERSION': '1.13.0',
-      'SECURITY-APPNAME': process.env.EBAY_APP_ID,
+      'SECURITY-APPNAME': process.env.EBAY_CLIENT_ID,
       'RESPONSE-DATA-FORMAT': 'JSON',
       'keywords': query,
       'paginationInput.entriesPerPage': '50',
@@ -260,7 +260,7 @@ async function searchEbayBIN(item, soldData) {
     const params = new URLSearchParams({
       'OPERATION-NAME': 'findItemsAdvanced',
       'SERVICE-VERSION': '1.13.0',
-      'SECURITY-APPNAME': process.env.EBAY_APP_ID,
+      'SECURITY-APPNAME': process.env.EBAY_CLIENT_ID,
       'RESPONSE-DATA-FORMAT': 'JSON',
       'keywords': item.q,
       'paginationInput.entriesPerPage': '30',
@@ -300,7 +300,7 @@ async function searchEbayAuctions(item, soldData) {
     const params = new URLSearchParams({
       'OPERATION-NAME': 'findItemsAdvanced',
       'SERVICE-VERSION': '1.13.0',
-      'SECURITY-APPNAME': process.env.EBAY_APP_ID,
+      'SECURITY-APPNAME': process.env.EBAY_CLIENT_ID,
       'RESPONSE-DATA-FORMAT': 'JSON',
       'keywords': item.q,
       'paginationInput.entriesPerPage': '20',
