@@ -255,8 +255,7 @@ async function searchEbayBIN(item, soldData) {
   try {
     if (!soldData || soldData.median < 5) return [];
 
-    const maxBuy = Math.min(Math.floor(soldData.median * 0.45), MAX_BUY);
-    if (maxBuy < 2) return [];
+    const maxBuy = MAX_BUY; // Always search up to max buy price, profit filter handles the rest
 
     const params = new URLSearchParams({
       'OPERATION-NAME': 'findItemsAdvanced',
@@ -296,8 +295,7 @@ async function searchEbayAuctions(item, soldData) {
   try {
     if (!soldData || soldData.median < 5) return [];
 
-    const maxBuy = Math.min(Math.floor(soldData.median * 0.35), MAX_BUY);
-    if (maxBuy < 2) return [];
+    const maxBuy = MAX_BUY; // Always search up to max buy price
 
     const params = new URLSearchParams({
       'OPERATION-NAME': 'findItemsAdvanced',
