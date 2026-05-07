@@ -34,7 +34,10 @@ let lastScanTime = null;
 let lastDealsAlerted = [];
 let recentDeals = []; // last 50 deals for dashboard
 let soldDataCache = {}; // cache real sold prices per search term
+let lastEmailSent = 0; // timestamp of last email — rate limit to 1 per hour
+const EMAIL_RATE_LIMIT_MS = 60 * 60 * 1000; // 1 hour between emails
 let purchaseLog = []; // track what you buy and sell for profit analysis
+let scanRunning = false; // prevents concurrent scans
 
 // ── Fetch helper ──────────────────────────────────────────────
 function fetchUrl(url, options = {}) {
@@ -404,6 +407,14 @@ async function scanOxfam() {
         const tier = score >= MUST_BUY_SCORE ? 'mustbuy' : score >= STRONG_SCORE ? 'strong' : 'possible';
         if (tier === 'possible') continue;
 
+        // Run Claude vision on Oxfam candidates same as eBay
+        const oxfamDeal = { title, price, image, brand: search.brand, cat: search.cat, source: 'Oxfam' };
+        const oxfamScored = await scoreWithClaude(oxfamDeal);
+        if (oxfamScored && !oxfamScored.pass) {
+          console.log('[OXFAM BLOCKED] ' + title.substring(0,40) + ' — appeal ' + oxfamScored.appeal + '/10, condition ' + oxfamScored.condition + '/10: ' + oxfamScored.conditionReason);
+          continue;
+        }
+
         const velocity = getSellVelocity(search.brand);
         deals.push({
           id: 'oxfam_' + Buffer.from(itemUrl).toString('base64').substring(0,20),
@@ -492,6 +503,8 @@ function processBrowseItems(items, queueItem, soldData, listingType) {
       const country = ebayItem.itemLocation?.country;
       if (country && country !== 'GB') continue;
 
+      // Block extreme sizes (3XL+)
+      if (/\b(3xl|4xl|5xl|6xl|xxxl)\b/i.test(title)) continue;
       // Block US kids sizing — 2T, 3T, 24M, 18M, 3 Months, toddler, infant, youth
       if (/\d+[tm]|months?|toddler|infant|baby|youth/i.test(title)) continue;
 
@@ -588,6 +601,101 @@ function processBrowseItems(items, queueItem, soldData, listingType) {
 }
 
 // ── Claude deal analysis (for must-buy tier only) ─────────────
+// ── Claude vision scoring — gates every candidate ────────────
+// Caches results 24hrs to avoid re-scoring same item
+const appealCache = new Map(); // cacheKey -> { data, ts }
+
+function getAppealCacheKey(title, brand, cat) {
+  const normalised = title.toLowerCase()
+    .replace(/\b(xs|s|m|l|xl|xxl|uk\s?\d+|size\s?\d+|\d+\s?years?)\b/gi, '')
+    .replace(/\b(white|black|grey|gray|blue|red|green|navy|brown|beige|cream)\b/gi, '')
+    .replace(/[^a-z\s]/g, '').trim().substring(0, 40);
+  return (brand || '') + '|' + (cat || '') + '|' + normalised;
+}
+
+async function scoreWithClaude(deal) {
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+
+  // Check cache first — 24hr cache avoids re-scoring same item
+  const cacheKey = getAppealCacheKey(deal.title, deal.brand, deal.cat);
+  const cached = appealCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) {
+    return cached.data;
+  }
+
+  try {
+    const isFootwear = ['trainers','boots'].includes(deal.cat);
+    const minCond = isFootwear ? MIN_CONDITION_FOOTWEAR : MIN_CONDITION;
+
+    const prompt = `You are a professional UK reseller who has bought and sold 10,000+ items. You lose money on bad purchases. Be BRUTALLY strict — 80% of items should fail.
+
+Item: "${deal.title}"
+Brand: ${deal.brand}
+Category: ${deal.cat}
+Buy price: £${deal.price}
+Source: ${deal.source || 'eBay'}${deal.source === 'Oxfam' ? ' (NOTE: charity shop condition grades — Very Good = used/acceptable on eBay, Good = well worn with likely visible marks)' : ''}
+${isFootwear ? 'FOOTWEAR RULE: Condition must be 8+ — sole wear, creasing and yellowing kill resale value.' : ''}
+
+Score TWO things 1-10. Be strict.
+
+APPEAL (1-10): Would this sell on Vinted UK within 2 weeks?
+- Score 8-10: Core desirable (black Sambas, white AF1s, popular colourways, sizes M/L/UK7-9)
+- Score 6-7: Decent but not exceptional
+- Score 1-5: Hard to sell (unusual colours, small sizes, niche styles)
+INSTANTLY SCORE 1 if: laces, socks, accessories, kids sizes, size 1/2/3 footwear, replacement parts, spare parts, bundle of 5+, damaged, broken
+
+CONDITION (1-10):
+${isFootwear ? `FOOTWEAR (strict):
+- 9-10: BNWT/unworn/new with tags
+- 7-8: Excellent with SPECIFIC detail ("minimal sole wear", "leather great condition")
+- 1-6: ANY vague description — "good condition", "pre-owned excellent" = MAX 5
+- 1-3: Any mention of wear, marks, creasing, yellowing` : `
+- 8-10: BNWT, unworn, immaculate, new with tags
+- 6-7: Excellent/very good with clear specific description
+- 1-5: Vague like "good used condition", "pre-owned excellent" with no specifics`}
+
+${deal.image ? 'Image provided — use it to assess actual condition. Look for sole wear, creasing, staining, yellowing, marks.' : ''}
+
+Respond ONLY with this JSON (no other text):
+{"appeal":7,"condition":6,"appealReason":"one sentence","conditionReason":"one sentence","pass":${isFootwear ? 'true if appeal>=' + MIN_APPEAL + ' AND condition>=' + MIN_CONDITION_FOOTWEAR : 'true if appeal>=' + MIN_APPEAL + ' AND condition>=' + MIN_CONDITION}}`;
+
+    const content = deal.image
+      ? [{ type: 'image', source: { type: 'url', url: deal.image, media_type: 'image/jpeg' } }, { type: 'text', text: prompt }]
+      : [{ type: 'text', text: prompt }];
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 120, messages: [{ role: 'user', content }] }),
+      signal: AbortSignal.timeout(20000)
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = data.content?.[0]?.text?.trim();
+    if (!text) return null;
+    const scored = JSON.parse(text.replace(/```json|```/g, '').trim());
+    if (typeof scored.appeal !== 'number') return null;
+
+    const isFootwearCheck = ['trainers','boots'].includes(deal.cat);
+    const minCondCheck = isFootwearCheck ? MIN_CONDITION_FOOTWEAR : MIN_CONDITION;
+    const result = {
+      appeal: scored.appeal,
+      condition: scored.condition,
+      appealReason: scored.appealReason || '',
+      conditionReason: scored.conditionReason || '',
+      pass: scored.appeal >= MIN_APPEAL && scored.condition >= minCondCheck
+    };
+
+    // Cache for 24 hours
+    appealCache.set(cacheKey, { data: result, ts: Date.now() });
+    return result;
+  } catch(e) {
+    console.log('Claude scoring error:', e.message);
+    return null;
+  }
+}
+
+// ── Claude text analysis (for email blurb only) ───────────────
 async function analyseWithClaude(deal) {
   if (!process.env.ANTHROPIC_API_KEY) return null;
   try {
@@ -595,8 +703,8 @@ async function analyseWithClaude(deal) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001', max_tokens: 100,
-        messages: [{ role: 'user', content: `In 15 words max, why is this a good flip? Title: "${deal.title}" Buy: £${deal.price}, Sell on Vinted: £${deal.vintedListPrice}, Real market median: £${deal.soldData.median}` }]
+        model: 'claude-haiku-4-5-20251001', max_tokens: 80,
+        messages: [{ role: 'user', content: `In 12 words max, why is this a good flip? Title: "${deal.title}" Buy: £${deal.price}, Sell: £${deal.vintedListPrice}, Median: £${deal.soldData.median}` }]
       })
     });
     const data = await res.json();
@@ -643,8 +751,9 @@ async function sendEmail(subject, html) {
 async function sendDealAlert(deals) {
   if (!deals.length) return;
 
-  // Telegram — instant alerts for each deal
-  for (const d of deals) {
+  // Telegram — instant alerts, max 5 per sendDealAlert call
+  const telegramDeals = deals.slice(0, 5);
+  for (const d of telegramDeals) {
     const urgency = d.isAuction && d.hoursLeft ? `\n⏱ Auction ending in ${d.hoursLeft}h` : '';
     const bids = d.isAuction ? ` (${d.bidCount} bids)` : '';
     const msg = `🔥 <b>${d.confidenceTier === 'mustbuy' ? '🎯 MUST BUY' : '⚡ STRONG DEAL'}</b>
@@ -654,6 +763,7 @@ async function sendDealAlert(deals) {
 💰 Buy: <b>£${d.price}</b>${bids}
 📈 Sell on ${d.bestPlatform}: <b>£${d.bestPlatform === 'Vinted' ? d.vintedListPrice : d.ebayListPrice}</b>
 ✅ Net profit: <b>+£${d.bestNet.toFixed(0)}</b> (${d.roi}% ROI)
+${d.appealScore !== undefined ? `🤖 Appeal <b>${d.appealScore}/10</b> · Condition <b>${d.conditionScore}/10</b>` : ''}${d.appealReason ? `\n💬 ${d.appealReason}` : ''}
 📊 Market median: £${d.soldData.median} (${d.soldData.sampleSize} real sales)
 💡 Buying at ${d.marketPercent}% of market value
 ${d.velocity ? d.velocity.label : ''}${urgency}
@@ -687,7 +797,7 @@ ${d.analysis ? `\n🤖 ${d.analysis}` : ''}
             ${d.isAuction ? `<span style="background:#E6F1FB;color:#185FA5;font-size:11px;font-weight:600;padding:3px 8px;border-radius:20px;margin-left:6px;">⏱ Auction ${d.hoursLeft}h left</span>` : ''}
           </div>
           <p style="font-size:15px;font-weight:700;margin:0 0 4px;color:#111;">${d.title}</p>
-          <p style="font-size:12px;color:#9ca3af;margin:0 0 12px;">Buying at <strong>${d.marketPercent}% of market value</strong> · ${d.soldData.sampleSize} real eBay sales · Median £${d.soldData.median}</p>
+          <p style="font-size:12px;color:#9ca3af;margin:0 0 12px;">Buying at <strong>${d.marketPercent}% of market value</strong> · ${d.soldData.sampleSize} real eBay sales · Median £${d.soldData.median}${d.appealScore !== undefined ? ` · Appeal ${d.appealScore}/10 · Condition ${d.conditionScore}/10` : ''}</p>
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;">
             <div style="text-align:center;background:#f9fafb;border-radius:8px;padding:8px;">
               <div style="font-size:10px;color:#9ca3af;">Buy</div>
@@ -716,6 +826,13 @@ ${d.analysis ? `\n🤖 ${d.analysis}` : ''}
       </div>
     </div>`).join('');
 
+  // Rate limit emails — max 1 per hour to prevent spam from multiple instances
+  if (Date.now() - lastEmailSent < EMAIL_RATE_LIMIT_MS) {
+    console.log(`Email rate limited — last sent ${Math.round((Date.now()-lastEmailSent)/60000)} mins ago`);
+    return;
+  }
+  lastEmailSent = Date.now();
+
   await sendEmail(
     `🔥 FlipRadar: ${mustBuyDeals.length} must-buy deal${mustBuyDeals.length>1?'s':''} — ${new Date().toLocaleString('en-GB')}`,
     `<div style="max-width:640px;margin:0 auto;padding:20px;font-family:sans-serif;">
@@ -731,6 +848,8 @@ ${d.analysis ? `\n🤖 ${d.analysis}` : ''}
 let qIdx = 0;
 
 async function runScan() {
+  if (scanRunning) { console.log('Scan already running — skipping'); return; }
+  scanRunning = true;
   const startTime = Date.now();
   console.log(`[${new Date().toISOString()}] Scanning... (batch ${scanCount + 1})`);
 
@@ -799,11 +918,34 @@ async function runScan() {
   // Sort by score
   uniqueDeals.sort((a, b) => b.score - a.score);
 
+  // ── CLAUDE VISION SCORING — gates every alert candidate ──────
+  // Run on top candidates only (max 8 per scan to control API costs)
+  const candidates = uniqueDeals.filter(d => d.confidenceTier === 'mustbuy' || d.confidenceTier === 'strong').slice(0, 8);
+  const visionPassed = [];
+  for (const deal of candidates) {
+    const scored = await scoreWithClaude(deal);
+    if (!scored) {
+      visionPassed.push(deal); // API error — allow through
+      continue;
+    }
+    deal.appealScore = scored.appeal;
+    deal.conditionScore = scored.condition;
+    deal.appealReason = scored.appealReason || '';
+    deal.conditionReason = scored.conditionReason || '';
+    if (scored.pass) {
+      visionPassed.push(deal);
+      console.log(`[PASS] ${deal.title.substring(0,40)} — appeal ${scored.appeal}/10, condition ${scored.condition}/10`);
+    } else {
+      console.log(`[BLOCKED] ${deal.title.substring(0,40)} — appeal ${scored.appeal}/10, condition ${scored.condition}/10: ${scored.reason}`);
+    }
+    await sleep(200); // brief pause between Claude calls
+  }
+
   // Add to recent deals cache (keep last 50)
   recentDeals = [...uniqueDeals, ...recentDeals].slice(0, 50);
 
-  // Only alert on strong/mustbuy
-  const alertDeals = uniqueDeals.filter(d => d.confidenceTier === 'mustbuy' || d.confidenceTier === 'strong');
+  // Only alert on vision-passed deals
+  const alertDeals = visionPassed;
 
   if (alertDeals.length > 0) {
     console.log(`✅ Found ${alertDeals.length} strong deals — alerting`);
@@ -826,6 +968,7 @@ async function runScan() {
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`Scan completed in ${duration}s`);
+  scanRunning = false;
 }
 
 // ── Schedule ──────────────────────────────────────────────────
