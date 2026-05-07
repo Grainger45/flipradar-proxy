@@ -826,8 +826,9 @@ ${d.analysis ? `\n🤖 ${d.analysis}` : ''}
       </div>
     </div>`).join('');
 
-  // Rate limit emails — max 1 per hour to prevent spam from multiple instances
-  if (Date.now() - lastEmailSent < EMAIL_RATE_LIMIT_MS) {
+  // Rate limit — but ALWAYS send for must-buys regardless of timing
+  const hasMustBuys = mustBuyDeals.length > 0;
+  if (!hasMustBuys && Date.now() - lastEmailSent < EMAIL_RATE_LIMIT_MS) {
     console.log(`Email rate limited — last sent ${Math.round((Date.now()-lastEmailSent)/60000)} mins ago`);
     return;
   }
