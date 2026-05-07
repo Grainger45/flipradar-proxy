@@ -60,6 +60,30 @@ function fetchUrl(url, options = {}) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ── Real sold data from eBay completed listings ───────────────
+// ── eBay OAuth token (Client Credentials) ────────────────────
+let ebayToken = null;
+let ebayTokenExpiry = 0;
+async function getEbayToken() {
+  if (ebayToken && Date.now() < ebayTokenExpiry - 60000) return ebayToken;
+  try {
+    const creds = Buffer.from(process.env.EBAY_CLIENT_ID + ':' + process.env.EBAY_CLIENT_SECRET).toString('base64');
+    const res = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
+      method: 'POST',
+      headers: { 'Authorization': 'Basic ' + creds, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'grant_type=client_credentials&scope=https%3A%2F%2Fapi.ebay.com%2Foauth%2Fapi_scope'
+    });
+    const data = await res.json();
+    if (data.access_token) {
+      ebayToken = data.access_token;
+      ebayTokenExpiry = Date.now() + (data.expires_in * 1000);
+      console.log('eBay OAuth token refreshed');
+      return ebayToken;
+    }
+    console.error('eBay token error:', data.error_description);
+    return null;
+  } catch(e) { console.error('eBay token fetch error:', e.message); return null; }
+}
+
 async function getRealSoldData(query) {
   const cacheKey = query.toLowerCase();
   const now = Date.now();
@@ -70,29 +94,25 @@ async function getRealSoldData(query) {
   }
 
   try {
-    // Use eBay Finding API findCompletedItems — no scraping, no bot detection
-    const params = new URLSearchParams({
-      'OPERATION-NAME': 'findCompletedItems',
-      'SERVICE-VERSION': '1.13.0',
-      'SECURITY-APPNAME': process.env.EBAY_CLIENT_ID,
-      'RESPONSE-DATA-FORMAT': 'JSON',
-      'keywords': query,
-      'paginationInput.entriesPerPage': '50',
-      'itemFilter(0).name': 'SoldItemsOnly',
-      'itemFilter(0).value': 'true',
-      'itemFilter(1).name': 'Condition',
-      'itemFilter(1).value': 'Used',
-      'itemFilter(2).name': 'LocatedIn',
-      'itemFilter(2).value': 'GB',
-      'sortOrder': 'EndTimeSoonest'
-    });
+    // Use eBay Browse API — OAuth based, no allowlist restriction
+    const token = await getEbayToken();
+    if (!token) { soldDataCache[cacheKey] = { timestamp: now, data: null }; return null; }
 
-    const rawData = await fetchUrl(`https://svcs.ebay.com/services/search/FindingService/v1?${params}`);
-    const parsed = JSON.parse(rawData);
-    const items = parsed?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
+    const url = 'https://api.ebay.com/buy/browse/v1/item_summary/search?' + new URLSearchParams({
+      q: query,
+      filter: 'conditionIds:{3000|4000|5000},buyingOptions:{FIXED_PRICE},deliveryCountry:GB',
+      sort: 'endingSoonest',
+      limit: '50',
+      fieldgroups: 'MATCHING_ITEMS'
+    });
+    const res = await fetch(url, {
+      headers: { 'Authorization': 'Bearer ' + token, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_GB', 'Content-Type': 'application/json' }
+    });
+    const parsed = await res.json();
+    const items = parsed?.itemSummaries || [];
 
     const prices = items
-      .map(i => parseFloat(i.sellingStatus?.[0]?.currentPrice?.[0]?.['__value__'] || '0'))
+      .map(i => parseFloat(i.price?.value || '0'))
       .filter(p => p >= 3 && p <= 500);
 
     if (prices.length < 3) {
@@ -279,7 +299,12 @@ async function searchEbayBIN(item, soldData) {
       'sortOrder': 'StartTimeNewest',
     });
 
-    const data = await fetchUrl(`https://svcs.ebay.com/services/search/FindingService/v1?${params}`);
+    const token = await getEbayToken();
+    if (!token) return [];
+    const res = await fetch(`https://svcs.ebay.com/services/search/FindingService/v1?${params}`, {
+      headers: { 'X-EBAY-SOA-SECURITY-APPNAME': process.env.EBAY_APP_ID || process.env.EBAY_CLIENT_ID }
+    });
+    const data = await res.text();
     const parsed = JSON.parse(data);
     const items = parsed?.findItemsAdvancedResponse?.[0]?.searchResult?.[0]?.item || [];
 
@@ -321,9 +346,14 @@ async function searchEbayAuctions(item, soldData) {
       'sortOrder': 'EndTimeSoonest',
     });
 
-    const data = await fetchUrl(`https://svcs.ebay.com/services/search/FindingService/v1?${params}`);
-    const parsed = JSON.parse(data);
-    const items = parsed?.findItemsAdvancedResponse?.[0]?.searchResult?.[0]?.item || [];
+    const token2 = await getEbayToken();
+    if (!token2) return [];
+    const res2 = await fetch(`https://svcs.ebay.com/services/search/FindingService/v1?${params}`, {
+      headers: { 'X-EBAY-SOA-SECURITY-APPNAME': process.env.EBAY_APP_ID || process.env.EBAY_CLIENT_ID }
+    });
+    const data2 = await res2.text();
+    const parsed2 = JSON.parse(data2);
+    const items = parsed2?.findItemsAdvancedResponse?.[0]?.searchResult?.[0]?.item || [];
 
     return processItems(items, item, soldData, 'Auction');
   } catch(e) {
