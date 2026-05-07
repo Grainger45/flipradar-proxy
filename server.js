@@ -21,7 +21,7 @@ const MIN_CONDITION = 7;        // Clothing condition minimum
 const MIN_CONDITION_FOOTWEAR = 8; // Footwear stricter
 const MIN_SOLD_SAMPLE = 3;      // Minimum real eBay sales required
 const MUST_BUY_SCORE = 60;      // Score threshold for Must Buy
-const STRONG_SCORE = 35;        // Score threshold for Strong Deal
+const STRONG_SCORE = 50;        // Score threshold for Strong Deal
 const SUSPEND_AFTER_DAYS = 14;  // Auto-suspend searches with no deals
 
 // ── State ─────────────────────────────────────────────────────
@@ -34,7 +34,9 @@ let lastScanTime = null;
 let lastDealsAlerted = [];
 let recentDeals = []; // last 50 deals for dashboard
 let soldDataCache = {}; // cache real sold prices per search term
-let lastEmailSent = 0; // timestamp of last email — rate limit to 1 per hour
+let lastEmailSent = 0; // timestamp of last email
+let lastTelegramSent = 0; // timestamp of last Telegram alert
+const TELEGRAM_COOLDOWN_MS = 30 * 60 * 1000; // 30 mins between Telegram batches
 const EMAIL_RATE_LIMIT_MS = 60 * 60 * 1000; // 1 hour between emails
 let purchaseLog = []; // track what you buy and sell for profit analysis
 let scanRunning = false; // prevents concurrent scans
@@ -751,7 +753,10 @@ async function sendEmail(subject, html) {
 async function sendDealAlert(deals) {
   if (!deals.length) return;
 
-  // Telegram — instant alerts, max 5 per sendDealAlert call
+  // Telegram — max 5 per batch, max 1 batch per 30 mins
+  if (Date.now() - lastTelegramSent < TELEGRAM_COOLDOWN_MS) { console.log("Telegram rate limited"); }
+  else {
+  lastTelegramSent = Date.now();
   const telegramDeals = deals.slice(0, 5);
   for (const d of telegramDeals) {
     const urgency = d.isAuction && d.hoursLeft ? `\n⏱ Auction ending in ${d.hoursLeft}h` : '';
@@ -779,6 +784,7 @@ ${d.analysis ? `\n🤖 ${d.analysis}` : ''}
     }
     await sleep(500);
   }
+  } // end Telegram cooldown block
 
   // Email must-buys only — strong deals go to Telegram only
   const mustBuyDeals = deals.filter(d => d.confidenceTier === 'mustbuy');
@@ -946,7 +952,8 @@ async function runScan() {
   recentDeals = [...uniqueDeals, ...recentDeals].slice(0, 50);
 
   // Only alert on vision-passed deals
-  const alertDeals = visionPassed;
+  // Only alert mustbuys — strong deals logged but not alerted
+  const alertDeals = visionPassed.filter(d => d.confidenceTier === "mustbuy");
 
   if (alertDeals.length > 0) {
     console.log(`✅ Found ${alertDeals.length} strong deals — alerting`);
