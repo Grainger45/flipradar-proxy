@@ -20,8 +20,8 @@ const MIN_APPEAL = 7;           // Claude appeal score minimum (0-10)
 const MIN_CONDITION = 7;        // Clothing condition minimum
 const MIN_CONDITION_FOOTWEAR = 8; // Footwear stricter
 const MIN_SOLD_SAMPLE = 3;      // Minimum real eBay sales required
-const MUST_BUY_SCORE = 70;      // Score threshold for Must Buy
-const STRONG_SCORE = 45;        // Score threshold for Strong Deal
+const MUST_BUY_SCORE = 60;      // Score threshold for Must Buy
+const STRONG_SCORE = 35;        // Score threshold for Strong Deal
 const SUSPEND_AFTER_DAYS = 14;  // Auto-suspend searches with no deals
 
 // ── State ─────────────────────────────────────────────────────
@@ -366,15 +366,20 @@ function processItems(items, queueItem, soldData, listingType) {
       // Confidence scoring
       let tier = 'possible';
       let score = 0;
-      if (marketPercent <= 30) score += 50; // buying at 30% or less of market
-      else if (marketPercent <= 45) score += 35;
-      else if (marketPercent <= 55) score += 20;
-      if (roi >= 200) score += 30;
-      else if (roi >= 150) score += 20;
-      else if (roi >= 100) score += 10;
-      if (soldData.sampleSize >= 20) score += 10; // strong market evidence
+      // How underpriced vs market — loosened thresholds
+      if (marketPercent <= 30) score += 50;      // extreme underpricing
+      else if (marketPercent <= 45) score += 40; // very underpriced
+      else if (marketPercent <= 60) score += 28; // significantly underpriced
+      else if (marketPercent <= 75) score += 15; // moderately underpriced
+      // ROI — loosened thresholds
+      if (roi >= 150) score += 25;
+      else if (roi >= 100) score += 18;
+      else if (roi >= 60)  score += 10;
+      // Data quality bonus
+      if (soldData.sampleSize >= 20) score += 10;
+      else if (soldData.sampleSize >= 5) score += 5;
       if (freeShipping) score += 5;
-      if (listingType === 'Auction' && bidCount === 0) score += 15; // no bids = opportunity
+      if (listingType === 'Auction' && bidCount === 0) score += 15;
 
       // Fuzzy brand match bonus
       const fuzzyBrand = detectFuzzyBrand(title);
