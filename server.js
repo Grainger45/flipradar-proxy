@@ -25,7 +25,8 @@ const STRONG_SCORE = 35;        // Score threshold for Strong Deal
 const SUSPEND_AFTER_DAYS = 14;  // Auto-suspend searches with no deals
 
 // ── State ─────────────────────────────────────────────────────
-let alertedIds = new Set();
+const alertedIds = new Map(); // itemId -> timestamp of last alert
+const ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours — prevents repeat alerts on restart
 let seenTitles = new Set(); // deduplicate same item across searches
 let alertedCount = 0;
 let scanCount = 0;
@@ -331,6 +332,25 @@ function processBrowseItems(items, queueItem, soldData, listingType) {
       if (price < 1 || price > MAX_BUY) continue;
 
       const title = ebayItem.title || '';
+      const titleLow = title.toLowerCase();
+
+      // Block non-UK listings
+      const country = ebayItem.itemLocation?.country;
+      if (country && country !== 'GB') continue;
+
+      // Block US kids sizing — 2T, 3T, 24M, 18M, 3 Months, toddler, infant, youth
+      if (/\d+[tm]|months?|toddler|infant|baby|youth/i.test(title)) continue;
+
+      // Block shorts/cutoffs from Levi's and denim searches
+      if (titleLow.includes('levi') || queueItem.cat === 'denim') {
+        if (/short|cutoff|cut.off|jort/i.test(title)) continue;
+      }
+
+      // Block dresses, skirts and non-clothing in clothing searches
+      if (['nike','adidas','polo','outdoor','workwear','vintage'].includes(queueItem.cat)) {
+        if (/dress|skirt|costume/i.test(title)) continue;
+      }
+
       const itemId = ebayItem.itemId || '';
       const url = ebayItem.itemWebUrl || '';
       const image = ebayItem.image?.imageUrl || ebayItem.thumbnailImages?.[0]?.imageUrl || '';
@@ -477,7 +497,7 @@ ${d.analysis ? `\n🤖 ${d.analysis}` : ''}
   }
 
   // Email digest
-  const cards = deals.map(d => `
+  const cards = mustBuyDeals.map(d => `
     <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px;font-family:sans-serif;">
       <div style="display:flex;gap:12px;align-items:flex-start;">
         ${d.image ? `<img src="${d.image}" style="width:90px;height:90px;object-fit:cover;border-radius:8px;flex-shrink:0;" />` : ''}
@@ -517,10 +537,14 @@ ${d.analysis ? `\n🤖 ${d.analysis}` : ''}
       </div>
     </div>`).join('');
 
+  // Email must-buys only — strong deals go to Telegram only
+  const mustBuyDeals = deals.filter(d => d.confidenceTier === 'mustbuy');
+  if (mustBuyDeals.length === 0) { console.log('Strong deals only — Telegram sent, no email'); return; }
+
   await sendEmail(
-    `🔥 FlipRadar: ${deals.length} must-buy deal${deals.length>1?'s':''} — ${new Date().toLocaleString('en-GB')}`,
+    `🔥 FlipRadar: ${mustBuyDeals.length} must-buy deal${mustBuyDeals.length>1?'s':''} — ${new Date().toLocaleString('en-GB')}`,
     `<div style="max-width:640px;margin:0 auto;padding:20px;font-family:sans-serif;">
-      <h1 style="font-size:22px;font-weight:700;color:#111;margin:0 0 4px;">🔥 ${deals.length} deal${deals.length>1?'s':''} found</h1>
+      <h1 style="font-size:22px;font-weight:700;color:#111;margin:0 0 4px;">🔥 ${mustBuyDeals.length} must-buy deal${mustBuyDeals.length>1?'s':''} found</h1>
       <p style="color:#9ca3af;font-size:12px;margin:0 0 20px;">Real sold data · Buy under £${MAX_BUY} · Min £${MIN_PROFIT} profit · ${new Date().toLocaleString('en-GB')}</p>
       ${cards}
       <p style="font-size:11px;color:#d1d5db;text-align:center;margin-top:20px;">FlipRadar Pro · eBay UK → Vinted arbitrage</p>
@@ -537,7 +561,7 @@ async function runScan() {
 
   // Process 4 items per scan (rotate through queue)
   const batch = [];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 6; i++) {
     batch.push(QUEUE[(qIdx + i) % QUEUE.length]);
   }
   qIdx = (qIdx + 4) % QUEUE.length;
@@ -554,13 +578,13 @@ async function runScan() {
       // Search BIN listings
       const binDeals = await searchEbayBIN(item, soldData);
       for (const deal of binDeals) {
-        if (!alertedIds.has(deal.id)) newDeals.push(deal);
+        if (!alertedIds.has(deal.id) || (Date.now() - alertedIds.get(deal.id)) > ALERT_COOLDOWN_MS) newDeals.push(deal);
       }
 
       // Search ending auctions
       const auctionDeals = await searchEbayAuctions(item, soldData);
       for (const deal of auctionDeals) {
-        if (!alertedIds.has(deal.id)) newDeals.push(deal);
+        if (!alertedIds.has(deal.id) || (Date.now() - alertedIds.get(deal.id)) > ALERT_COOLDOWN_MS) newDeals.push(deal);
       }
 
       await sleep(400);
@@ -601,7 +625,7 @@ async function runScan() {
       deal.analysis = await analyseWithClaude(deal);
     }
 
-    alertDeals.forEach(d => { alertedIds.add(d.id); recordDeal(d.cat || d.brand); });
+    alertDeals.forEach(d => { alertedIds.set(d.id, Date.now()); recordDeal(d.cat || d.brand); });
     alertedCount += alertDeals.length;
     lastDealsAlerted = alertDeals.slice(0, 5).map(d =>
       `${d.title} (Buy £${d.price} → +£${d.bestNet.toFixed(0)} profit, ${d.roi}% ROI)`
@@ -634,7 +658,7 @@ app.get('/health', (_, res) => res.json({
   telegramEnabled: !!(process.env.TELEGRAM_TOKEN && process.env.TELEGRAM_CHAT_ID),
   emailReady: !!process.env.RESEND_API_KEY,
   maxBuyPrice: MAX_BUY, minProfit: MIN_PROFIT,
-  queueSize: QUEUE.length, alertedSoFar: alertedCount,
+  queueSize: QUEUE.length, alertedSoFar: alertedCount, alertedIdsTracked: alertedIds.size,
   scanCount, soldDataCached: Object.keys(soldDataCache).length
 }));
 
