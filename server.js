@@ -270,112 +270,73 @@ const QUEUE = [
   { q: 'Ralf Lauren polo', soldQ: 'Ralph Lauren polo shirt', brand: 'Ralph Lauren', cat: 'typo' },
 ];
 
-// ── eBay search (Buy It Now) ───────────────────────────────────
+// ── eBay search (Buy It Now) — Browse API ────────────────────
 async function searchEbayBIN(item, soldData) {
   try {
     if (!soldData || soldData.median < 5) return [];
-
-    const maxBuy = MAX_BUY; // Always search up to max buy price, profit filter handles the rest
-
-    const params = new URLSearchParams({
-      'OPERATION-NAME': 'findItemsAdvanced',
-      'SERVICE-VERSION': '1.13.0',
-      'SECURITY-APPNAME': process.env.EBAY_CLIENT_ID,
-      'RESPONSE-DATA-FORMAT': 'JSON',
-      'keywords': item.q,
-      'paginationInput.entriesPerPage': '30',
-      'itemFilter(0).name': 'MaxPrice',
-      'itemFilter(0).value': maxBuy,
-      'itemFilter(0).paramName': 'Currency',
-      'itemFilter(0).paramValue': 'GBP',
-      'itemFilter(1).name': 'MinPrice',
-      'itemFilter(1).value': '1',
-      'itemFilter(2).name': 'ListingType',
-      'itemFilter(2).value': 'FixedPrice',
-      'itemFilter(3).name': 'Condition',
-      'itemFilter(3).value': 'Used',
-      'itemFilter(4).name': 'LocatedIn',
-      'itemFilter(4).value': 'GB',
-      'sortOrder': 'StartTimeNewest',
-    });
-
     const token = await getEbayToken();
     if (!token) return [];
-    const res = await fetch(`https://svcs.ebay.com/services/search/FindingService/v1?${params}`, {
-      headers: { 'X-EBAY-SOA-SECURITY-APPNAME': process.env.EBAY_APP_ID || process.env.EBAY_CLIENT_ID }
-    });
-    const data = await res.text();
-    const parsed = JSON.parse(data);
-    const items = parsed?.findItemsAdvancedResponse?.[0]?.searchResult?.[0]?.item || [];
 
-    return processItems(items, item, soldData, 'BIN');
+    const url = 'https://api.ebay.com/buy/browse/v1/item_summary/search?' + new URLSearchParams({
+      q: item.q,
+      filter: `price:[1..${MAX_BUY}],conditionIds:{3000|4000|5000},buyingOptions:{FIXED_PRICE},deliveryCountry:GB`,
+      sort: 'newlyListed',
+      limit: '50',
+    });
+
+    const res = await fetch(url, {
+      headers: { 'Authorization': 'Bearer ' + token, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_GB' }
+    });
+    const parsed = await res.json();
+    const items = parsed?.itemSummaries || [];
+    return processBrowseItems(items, item, soldData, 'BIN');
   } catch(e) {
     console.error(`BIN search error (${item.q}):`, e.message);
     return [];
   }
 }
 
-// ── eBay auction sniping (ending soon, low bids) ──────────────
+// ── eBay auction sniping — Browse API ────────────────────────
 async function searchEbayAuctions(item, soldData) {
   try {
     if (!soldData || soldData.median < 5) return [];
+    const token = await getEbayToken();
+    if (!token) return [];
 
-    const maxBuy = MAX_BUY; // Always search up to max buy price
-
-    const params = new URLSearchParams({
-      'OPERATION-NAME': 'findItemsAdvanced',
-      'SERVICE-VERSION': '1.13.0',
-      'SECURITY-APPNAME': process.env.EBAY_CLIENT_ID,
-      'RESPONSE-DATA-FORMAT': 'JSON',
-      'keywords': item.q,
-      'paginationInput.entriesPerPage': '20',
-      'itemFilter(0).name': 'MaxPrice',
-      'itemFilter(0).value': maxBuy,
-      'itemFilter(0).paramName': 'Currency',
-      'itemFilter(0).paramValue': 'GBP',
-      'itemFilter(1).name': 'MinPrice',
-      'itemFilter(1).value': '0.99',
-      'itemFilter(2).name': 'ListingType',
-      'itemFilter(2).value': 'Auction',
-      'itemFilter(3).name': 'Condition',
-      'itemFilter(3).value': 'Used',
-      'itemFilter(4).name': 'LocatedIn',
-      'itemFilter(4).value': 'GB',
-      'itemFilter(5).name': 'EndTimeTo',
-      'itemFilter(5).value': new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(), // ending in 3 hours
-      'sortOrder': 'EndTimeSoonest',
+    const endingSoon = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+    const url = 'https://api.ebay.com/buy/browse/v1/item_summary/search?' + new URLSearchParams({
+      q: item.q,
+      filter: `price:[0.99..${MAX_BUY}],conditionIds:{3000|4000|5000},buyingOptions:{AUCTION},deliveryCountry:GB,endDate:[..${endingSoon}]`,
+      sort: 'endingSoonest',
+      limit: '20',
     });
 
-    const token2 = await getEbayToken();
-    if (!token2) return [];
-    const res2 = await fetch(`https://svcs.ebay.com/services/search/FindingService/v1?${params}`, {
-      headers: { 'X-EBAY-SOA-SECURITY-APPNAME': process.env.EBAY_APP_ID || process.env.EBAY_CLIENT_ID }
+    const res = await fetch(url, {
+      headers: { 'Authorization': 'Bearer ' + token, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_GB' }
     });
-    const data2 = await res2.text();
-    const parsed2 = JSON.parse(data2);
-    const items = parsed2?.findItemsAdvancedResponse?.[0]?.searchResult?.[0]?.item || [];
-
-    return processItems(items, item, soldData, 'Auction');
+    const parsed = await res.json();
+    const items = parsed?.itemSummaries || [];
+    return processBrowseItems(items, item, soldData, 'Auction');
   } catch(e) {
     console.error(`Auction search error (${item.q}):`, e.message);
     return [];
   }
 }
 
-function processItems(items, queueItem, soldData, listingType) {
+function processBrowseItems(items, queueItem, soldData, listingType) {
   const deals = [];
   for (const ebayItem of items) {
     try {
-      const price = parseFloat(ebayItem.sellingStatus?.[0]?.currentPrice?.[0]?.['__value__'] || '0');
+      const price = parseFloat(ebayItem.price?.value || '0');
       if (price < 1 || price > MAX_BUY) continue;
 
-      const title = ebayItem.title?.[0] || '';
-      const itemId = ebayItem.itemId?.[0] || '';
-      const url = ebayItem.viewItemURL?.[0] || '';
-      const image = ebayItem.galleryURL?.[0] || '';
-      const endDate = ebayItem.listingInfo?.[0]?.endTime?.[0] || null;
-      const bidCount = parseInt(ebayItem.sellingStatus?.[0]?.bidCount?.[0] || '0');
-      const freeShipping = ebayItem.shippingInfo?.[0]?.shippingType?.[0] === 'Free';
+      const title = ebayItem.title || '';
+      const itemId = ebayItem.itemId || '';
+      const url = ebayItem.itemWebUrl || '';
+      const image = ebayItem.image?.imageUrl || ebayItem.thumbnailImages?.[0]?.imageUrl || '';
+      const endDate = ebayItem.itemEndDate || null;
+      const bidCount = parseInt(ebayItem.bidCount || '0');
+      const freeShipping = ebayItem.shippingOptions?.[0]?.shippingCostType === 'FREE';
 
       // Calculate real profit using actual sold data
       const vintedTarget = Math.round(soldData.median * 0.85); // list slightly below median
