@@ -595,7 +595,7 @@ async function searchEbayBIN(item, soldData) {
 
     const url = 'https://api.ebay.com/buy/browse/v1/item_summary/search?' + new URLSearchParams({
       q: item.q,
-      filter: `price:[1..${MAX_BUY}],conditionIds:{3000|4000|5000},buyingOptions:{FIXED_PRICE},deliveryCountry:GB`,
+      filter: `price:[1..${MAX_BUY}],conditionIds:{1000|2500|2750|3000|4000|5000|6000},buyingOptions:{FIXED_PRICE},deliveryCountry:GB`,
       sort: 'newlyListed',
       limit: '50',
     });
@@ -605,7 +605,7 @@ async function searchEbayBIN(item, soldData) {
     });
     const parsed = await res.json();
     const items = parsed?.itemSummaries || [];
-    if (items.length > 0) console.log(`BIN ${item.q.substring(0,25)}: ${items.length} raw results`);
+    console.log(`BIN ${item.q.substring(0,25)}: ${items.length} raw results from eBay`);
     return processBrowseItems(items, item, soldData, 'BIN');
   } catch(e) {
     console.error(`BIN search error (${item.q}):`, e.message);
@@ -623,7 +623,7 @@ async function searchEbayAuctions(item, soldData) {
     const endingSoon = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
     const url = 'https://api.ebay.com/buy/browse/v1/item_summary/search?' + new URLSearchParams({
       q: item.q,
-      filter: `price:[0.99..${MAX_BUY}],conditionIds:{3000|4000|5000},buyingOptions:{AUCTION},deliveryCountry:GB,endDate:[..${endingSoon}]`,
+      filter: `price:[0.99..${MAX_BUY}],conditionIds:{1000|2500|2750|3000|4000|5000|6000},buyingOptions:{AUCTION},deliveryCountry:GB,endDate:[..${endingSoon}]`,
       sort: 'endingSoonest',
       limit: '20',
     });
@@ -652,7 +652,7 @@ function processBrowseItems(items, queueItem, soldData, listingType) {
 
       // Block non-UK listings
       const country = ebayItem.itemLocation?.country;
-      if (country && country !== 'GB') continue;
+      if (country && country !== 'GB') { /* non-UK filtered */ continue; }
 
       // Block extreme sizes (3XL+)
       if (/\b(3xl|4xl|5xl|6xl|xxxl)\b/i.test(title)) continue;
