@@ -605,6 +605,7 @@ async function searchEbayBIN(item, soldData) {
     });
     const parsed = await res.json();
     const items = parsed?.itemSummaries || [];
+    if (items.length > 0) console.log(`BIN ${item.q.substring(0,25)}: ${items.length} raw results`);
     return processBrowseItems(items, item, soldData, 'BIN');
   } catch(e) {
     console.error(`BIN search error (${item.q}):`, e.message);
@@ -690,7 +691,7 @@ function processBrowseItems(items, queueItem, soldData, listingType) {
       const bestPlatform = vintedNet >= ebayNet ? 'Vinted' : 'eBay';
       const roi = Math.round((bestNet / price) * 100);
 
-      if (bestNet < MIN_PROFIT) continue;
+      if (bestNet < MIN_PROFIT) { console.log(`[LOW-PROFIT] ${title.substring(0,30)} buy £${price} net £${bestNet.toFixed(1)} (need £${MIN_PROFIT})`); continue; }
 
       // Calculate how underpriced vs market
       const marketPercent = Math.round((price / soldData.median) * 100);
