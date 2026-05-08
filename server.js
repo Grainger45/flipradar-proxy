@@ -150,6 +150,8 @@ async function getRealSoldData(query) {
     const trimmed = prices.slice(trimStart, trimEnd);
     const median = trimmed[Math.floor(trimmed.length / 2)];
 
+    // Sell-through rate estimate — top 60% of results assumed recent (30 days)
+    const recentCount = Math.ceil(prices.length * 0.6);
     const data = {
       median: Math.round(median * 100) / 100,
       low: Math.round(trimmed[0] * 100) / 100,
@@ -157,10 +159,10 @@ async function getRealSoldData(query) {
       sampleSize: prices.length,
       trimmedSize: trimmed.length,
       usingCleanComps: usingCleanComps || false,
-      // Fast-sale price (conservative — 25th percentile of clean comps)
       fastSalePrice: Math.round(trimmed[Math.floor(trimmed.length * 0.25)] * 100) / 100,
-      // Full value price (optimistic — 75th percentile)
       fullValuePrice: Math.round(trimmed[Math.floor(trimmed.length * 0.75)] * 100) / 100,
+      recentSales: recentCount,
+      sellThroughRate: Math.round((recentCount / Math.max(prices.length, 1)) * 100),
     };
 
     soldDataCache[cacheKey] = { timestamp: now, data };
@@ -369,6 +371,50 @@ const QUEUE = [
   { q: 'Nort Face jacket', soldQ: 'North Face fleece jacket', brand: 'North Face', cat: 'typo' },
   { q: 'Patogonia fleece jacket', soldQ: 'Patagonia fleece pullover', brand: 'Patagonia', cat: 'typo' },
 ];
+
+// ── Live Vinted market data — real sell prices + competition level ──
+// Scrapes Vinted catalog for active listings to validate eBay median
+const vintedMarketCache = new Map(); // query -> { data, ts }
+
+async function getVintedMarketData(query, brand) {
+  const cacheKey = (brand + '|' + query).toLowerCase();
+  const cached = vintedMarketCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 2 * 60 * 60 * 1000) return cached.data; // 2hr cache
+
+  try {
+    const url = `https://www.vinted.co.uk/catalog?search_text=${encodeURIComponent(query)}&order=newest_first&currency=GBP`;
+    const html = await fetchUrl(url);
+
+    // Extract prices from Vinted catalog page
+    const priceMatches = [...html.matchAll(/"price":\{"amount":"([\d.]+)"/g)];
+    const prices = priceMatches
+      .map(m => parseFloat(m[1]))
+      .filter(p => p >= 5 && p <= 200);
+
+    if (prices.length < 3) {
+      vintedMarketCache.set(cacheKey, { data: null, ts: Date.now() });
+      return null;
+    }
+
+    prices.sort((a, b) => a - b);
+    const median = prices[Math.floor(prices.length / 2)];
+    const low = prices[Math.floor(prices.length * 0.1)];
+    const high = prices[Math.floor(prices.length * 0.9)];
+    const activeListings = prices.length;
+
+    // Competition level
+    let competition = 'Low';
+    if (activeListings > 50) competition = 'High';
+    else if (activeListings > 20) competition = 'Medium';
+
+    const data = { median: Math.round(median), low: Math.round(low), high: Math.round(high), activeListings, competition };
+    vintedMarketCache.set(cacheKey, { data, ts: Date.now() });
+    console.log(`Vinted market: ${query} — median £${data.median}, ${activeListings} listings, ${competition} competition`);
+    return data;
+  } catch(e) {
+    return null; // Silent fail — Vinted may block
+  }
+}
 
 // ── Oxfam scanning — uncontested source, no other bot scans this ──
 const OXFAM_SEARCHES = [
@@ -925,7 +971,10 @@ ${d.analysis ? `\n🤖 ${d.analysis}` : ''}${d.isNewSeller ? "\n🆕 New seller 
             ${d.isAuction ? `<span style="background:#E6F1FB;color:#185FA5;font-size:11px;font-weight:600;padding:3px 8px;border-radius:20px;margin-left:6px;">⏱ Auction ${d.hoursLeft}h left</span>` : ''}
           </div>
           <p style="font-size:15px;font-weight:700;margin:0 0 4px;color:#111;">${d.title}</p>
-          <p style="font-size:12px;color:#9ca3af;margin:0 0 12px;">Buying at <strong>${d.marketPercent}% of market value</strong> · ${d.soldData.sampleSize} sales · Median £${d.soldData.median}${d.soldData.usingCleanComps ? ' <span style="color:#22c55e;">✅ clean comps</span>' : ''} · Score ${d.score}/100${d.soldData.fastSalePrice ? ` · Fast sale ~£${d.soldData.fastSalePrice}` : ''}${d.appealScore !== undefined ? ` · Appeal ${d.appealScore}/10 · Condition ${d.conditionScore}/10` : ''}</p>
+          <p style="font-size:12px;color:#9ca3af;margin:0 0 4px;">Buying at <strong>${d.marketPercent}% of eBay market value</strong> · ${d.soldData.sampleSize} sales · eBay median £${d.soldData.median}${d.soldData.usingCleanComps ? ' ✅' : ''}</p>
+          ${d.vintedMarket ? `<p style="font-size:12px;color:#22c55e;margin:0 0 4px;font-weight:600;">🛒 Vinted: £${d.vintedMarket.median} median · ${d.vintedMarket.activeListings} active listings · ${d.vintedMarket.competition} competition${d.highCompetition ? ' ⚠️' : ''}</p>` : ''}
+          ${d.soldData?.sellThroughRate ? `<p style="font-size:12px;color:#6b7280;margin:0 0 8px;">📈 Sell-through: ${d.soldData.sellThroughRate}% in 30 days · Fast sale price ~£${d.soldData.fastSalePrice}</p>` : ''}
+          ${d.appealScore !== undefined ? `<p style="font-size:12px;color:#6b7280;margin:0 0 8px;">🤖 Appeal ${d.appealScore}/10 · Condition ${d.conditionScore}/10${d.appealReason ? ' · ' + d.appealReason : ''}</p>` : ''}
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;">
             <div style="text-align:center;background:#f9fafb;border-radius:8px;padding:8px;">
               <div style="font-size:10px;color:#9ca3af;">Buy</div>
@@ -1081,13 +1130,39 @@ async function runScan() {
     deal.conditionScore = scored.condition;
     deal.appealReason = scored.appealReason || '';
     deal.conditionReason = scored.conditionReason || '';
-    if (scored.pass) {
-      visionPassed.push(deal);
-      console.log(`[PASS] ${deal.title.substring(0,40)} — appeal ${scored.appeal}/10, condition ${scored.condition}/10`);
-    } else {
-      console.log(`[BLOCKED] ${deal.title.substring(0,40)} — appeal ${scored.appeal}/10, condition ${scored.condition}/10: ${scored.reason}`);
+    if (!scored.pass) {
+      console.log(`[BLOCKED] ${deal.title.substring(0,40)} — appeal ${scored.appeal}/10, cond ${scored.condition}/10`);
+      await sleep(200);
+      continue;
     }
-    await sleep(200); // brief pause between Claude calls
+
+    // ── VINTED MARKET VALIDATION ──────────────────────────────
+    const searchTerm = deal.brand || deal.title.split(' ').slice(0,3).join(' ');
+    const vintedData = await getVintedMarketData(searchTerm, deal.brand);
+    if (vintedData) {
+      deal.vintedMarket = vintedData;
+      const realNet = vintedData.median - deal.price - POSTAGE;
+      if (realNet < MIN_PROFIT) {
+        console.log(`[VINTED-BLOCKED] ${deal.title.substring(0,35)} — Vinted median £${vintedData.median}, net £${realNet.toFixed(1)}`);
+        await sleep(200);
+        continue;
+      }
+      // Update profit with real Vinted price
+      deal.vintedListPrice = vintedData.median;
+      deal.vintedNet = Math.round(realNet * 100) / 100;
+      deal.bestNet = Math.max(deal.vintedNet, deal.ebayNet || 0);
+      deal.roi = Math.round((deal.bestNet / deal.price) * 100);
+      // Downgrade if market flooded
+      if (vintedData.activeListings > 80 && deal.confidenceTier === 'mustbuy') {
+        deal.confidenceTier = 'strong';
+        console.log(`[DOWNGRADED] ${deal.title.substring(0,35)} — ${vintedData.activeListings} active Vinted listings`);
+      }
+      deal.highCompetition = vintedData.competition === 'High';
+    }
+
+    visionPassed.push(deal);
+    console.log(`[PASS] ${deal.title.substring(0,35)} — appeal ${scored.appeal}/10, cond ${scored.condition}/10${vintedData ? ', Vinted £' + vintedData.median + ' (' + vintedData.activeListings + ' listings)' : ''}`);
+    await sleep(300);
   }
 
   // Add to recent deals cache (keep last 50)
