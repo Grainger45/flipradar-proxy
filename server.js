@@ -750,7 +750,7 @@ async function sendEmail(subject, html) {
   return false;
 }
 
-async function sendDealAlert(deals) {
+async function sendDealAlert(deals, scanCount = 99) {
   if (!deals.length) return;
 
   // Telegram — max 5 per batch, max 1 batch per 30 mins
@@ -833,7 +833,9 @@ ${d.analysis ? `\n🤖 ${d.analysis}` : ''}
     </div>`).join('');
 
   // Rate limit — but ALWAYS send for must-buys regardless of timing
-  // Rate limit ALL emails — 2 hrs for must-buys, 24 hrs for strong-only
+  // Never email on first 2 scans after restart — prevents restart spam
+  if (scanCount <= 2) { console.log(`Email suppressed — startup scan ${scanCount}`); return; }
+  // Rate limit: 2 hrs for must-buys, 24 hrs for strong-only
   const mustBuyLimit = 2 * 60 * 60 * 1000;
   const strongLimit = 24 * 60 * 60 * 1000;
   const limit = mustBuyDeals.length > 0 ? mustBuyLimit : strongLimit;
@@ -959,7 +961,7 @@ async function runScan() {
   const alertDeals = visionPassed.filter(d => d.confidenceTier === "mustbuy");
 
   if (alertDeals.length > 0) {
-    console.log(`✅ Found ${alertDeals.length} strong deals — alerting`);
+    console.log(`✅ Found ${alertDeals.length} must-buy deals — alerting`);
 
     // Add Claude analysis to must-buy deals
     for (const deal of alertDeals.filter(d => d.confidenceTier === 'mustbuy')) {
@@ -972,7 +974,7 @@ async function runScan() {
       `${d.title} (Buy £${d.price} → +£${d.bestNet.toFixed(0)} profit, ${d.roi}% ROI)`
     );
 
-    await sendDealAlert(alertDeals);
+    await sendDealAlert(alertDeals, scanCount);
   } else {
     console.log(`Scan ${scanCount}: ${uniqueDeals.length} deals found, none strong enough to alert`);
   }
