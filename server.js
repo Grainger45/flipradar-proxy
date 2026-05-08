@@ -118,9 +118,26 @@ async function getRealSoldData(query) {
     const parsed = await res.json();
     const items = parsed?.itemSummaries || [];
 
-    const prices = items
-      .map(i => parseFloat(i.price?.value || '0'))
-      .filter(p => p >= 3 && p <= 500);
+    // Condition-weighted pricing — prefer clean condition sold comps
+    // This fixes inflated medians caused by rare pristine examples
+    const CLEAN_KEYWORDS = ['excellent','immaculate','perfect','bnwt','bnib','new with tags','unworn','mint','deadstock'];
+    const WORN_KEYWORDS = ['worn','marks','stains','faded','damaged','repairs','tatty','rough','poor','play worn','fair'];
+    
+    const allPrices = items.map(i => ({
+      price: parseFloat(i.price?.value || '0'),
+      title: (i.title || '').toLowerCase(),
+      condition: (i.condition || '').toLowerCase()
+    })).filter(i => i.price >= 3 && i.price <= 500);
+
+    // Prefer clean condition items for pricing — more realistic resale value
+    const cleanPrices = allPrices.filter(i => 
+      CLEAN_KEYWORDS.some(k => i.title.includes(k) || i.condition.includes(k)) &&
+      !WORN_KEYWORDS.some(k => i.title.includes(k))
+    ).map(i => i.price);
+
+    // Fall back to all prices if not enough clean comps
+    const prices = cleanPrices.length >= 5 ? cleanPrices : allPrices.map(i => i.price);
+    const usingCleanComps = cleanPrices.length >= 5;
 
     if (prices.length < 3) {
       soldDataCache[cacheKey] = { timestamp: now, data: null };
@@ -138,7 +155,12 @@ async function getRealSoldData(query) {
       low: Math.round(trimmed[0] * 100) / 100,
       high: Math.round(trimmed[trimmed.length - 1] * 100) / 100,
       sampleSize: prices.length,
-      trimmedSize: trimmed.length
+      trimmedSize: trimmed.length,
+      usingCleanComps: usingCleanComps || false,
+      // Fast-sale price (conservative — 25th percentile of clean comps)
+      fastSalePrice: Math.round(trimmed[Math.floor(trimmed.length * 0.25)] * 100) / 100,
+      // Full value price (optimistic — 75th percentile)
+      fullValuePrice: Math.round(trimmed[Math.floor(trimmed.length * 0.75)] * 100) / 100,
     };
 
     soldDataCache[cacheKey] = { timestamp: now, data };
@@ -438,6 +460,86 @@ async function scanOxfam() {
   return deals;
 }
 
+// ── BHF (British Heart Foundation) scanning — uncontested source ──
+const BHF_SEARCHES = [
+  { term: 'barbour', brand: 'Barbour', avgSell: 85, cat: 'outdoor' },
+  { term: 'stone island', brand: 'Stone Island', avgSell: 110, cat: 'premium' },
+  { term: 'patagonia', brand: 'Patagonia', avgSell: 55, cat: 'outdoor' },
+  { term: 'north face', brand: 'North Face', avgSell: 45, cat: 'outdoor' },
+  { term: 'ralph lauren', brand: 'Ralph Lauren', avgSell: 40, cat: 'polo' },
+  { term: 'levi', brand: "Levi's", avgSell: 35, cat: 'jeans' },
+  { term: 'carhartt', brand: 'Carhartt', avgSell: 55, cat: 'workwear' },
+  { term: 'cp company', brand: 'CP Company', avgSell: 90, cat: 'premium' },
+  { term: 'dr martens', brand: 'Dr Martens', avgSell: 65, cat: 'boots' },
+  { term: 'nike vintage', brand: 'Nike', avgSell: 45, cat: 'nike' },
+  { term: 'adidas vintage', brand: 'Adidas', avgSell: 40, cat: 'adidas' },
+];
+
+async function scanBHF() {
+  const deals = [];
+  for (const search of BHF_SEARCHES) {
+    try {
+      // BHF uses a simple search endpoint
+      const url = `https://www.bhf.org.uk/shop/search?q=${encodeURIComponent(search.term)}&category=clothes`;
+      const html = await fetchUrl(url);
+      // Parse BHF product listings
+      const priceMatches = [...html.matchAll(/class="[^"]*price[^"]*"[^>]*>[\s\S]*?£([\d.]+)/g)];
+      const titleMatches = [...html.matchAll(/class="[^"]*product[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/g)];
+      const urlMatches   = [...html.matchAll(/href="(\/shop\/product[^"]+)"/g)];
+      const imgMatches   = [...html.matchAll(/src="([^"]*bhf[^"]*(?:jpg|jpeg|png|webp)[^"]*)"/g)];
+
+      for (let i = 0; i < Math.min(priceMatches.length, titleMatches.length); i++) {
+        const price = parseFloat(priceMatches[i]?.[1] || '0');
+        const title = (titleMatches[i]?.[1] || '').replace(/<[^>]+>/g,'').trim();
+        const itemUrl = urlMatches[i] ? 'https://www.bhf.org.uk' + urlMatches[i][1] : '';
+        const image = imgMatches[i]?.[1] || '';
+        if (!price || price > MAX_BUY || !title || title.length < 5) continue;
+
+        const seasonal = getSeasonalMultiplier(search.brand, search.cat);
+        const adjustedSell = search.avgSell * seasonal;
+        const net = Math.round((adjustedSell * 0.85 - price - POSTAGE) * 100) / 100;
+        if (net < MIN_PROFIT) continue;
+
+        const marketPercent = Math.round((price / adjustedSell) * 100);
+        const roi = Math.round((net / price) * 100);
+        let score = 0;
+        if (marketPercent <= 30) score += 50;
+        else if (marketPercent <= 45) score += 40;
+        else if (marketPercent <= 60) score += 28;
+        else if (marketPercent <= 75) score += 15;
+        if (roi >= 150) score += 25;
+        else if (roi >= 100) score += 18;
+        else if (roi >= 60) score += 10;
+        score += 10; // BHF bonus — uncontested source
+
+        const tier = score >= MUST_BUY_SCORE ? 'mustbuy' : score >= STRONG_SCORE ? 'strong' : 'possible';
+        if (tier === 'possible') continue;
+
+        // Run Claude vision
+        const bhfScored = await scoreWithClaude({ title, price, image, brand: search.brand, cat: search.cat, source: 'BHF' });
+        if (bhfScored && !bhfScored.pass) continue;
+
+        const velocity = getSellVelocity(search.brand);
+        deals.push({
+          id: 'bhf_' + Buffer.from(itemUrl || title).toString('base64').substring(0,20),
+          title, price, url: itemUrl, image,
+          brand: search.brand, cat: search.cat,
+          vintedListPrice: Math.round(adjustedSell * 0.85),
+          ebayListPrice: Math.round(adjustedSell * 0.9),
+          vintedNet: net, ebayNet: net, bestNet: net, netProfit: net,
+          bestPlatform: 'Vinted', roi, confidenceTier: tier, score,
+          marketPercent,
+          soldData: { median: adjustedSell, sampleSize: 0, fastSalePrice: null, fullValuePrice: null },
+          isAuction: false, bidCount: 0, hoursLeft: null, freeShipping: false,
+          source: 'BHF', listingType: 'BIN', velocity
+        });
+      }
+      await sleep(600);
+    } catch(e) { /* BHF may block — silent fail */ }
+  }
+  return deals;
+}
+
 // ── eBay search (Buy It Now) — Browse API ────────────────────
 async function searchEbayBIN(item, soldData) {
   try {
@@ -567,6 +669,12 @@ function processBrowseItems(items, queueItem, soldData, listingType) {
       // Seller motivation bonus
       const motivScore = scoreMotivation(title, '');
       if (motivScore > 0) score += motivScore * 3;
+      // New seller bonus — 0-10 feedback often means underpriced
+      const sellerFb = parseInt(ebayItem.seller?.feedbackScore || '99');
+      if (sellerFb <= 5) score += 12;
+      else if (sellerFb <= 20) score += 6;
+      if (title.length < 25) score += 5;
+      if (!ebayItem.image?.imageUrl) score += 3;
       if (score >= MUST_BUY_SCORE) tier = 'mustbuy';
       else if (score >= STRONG_SCORE) tier = 'strong';
 
@@ -577,10 +685,12 @@ function processBrowseItems(items, queueItem, soldData, listingType) {
       }
 
       const velocity = getSellVelocity(queueItem.brand);
+      const sellerFeedback = parseInt(ebayItem.seller?.feedbackScore || '99');
+      const isNewSeller = sellerFb <= 20;
       deals.push({
         id: itemId, title, price, url, image,
         brand: queueItem.brand, cat: queueItem.cat,
-        velocity,
+        velocity, isNewSeller, sellerFeedback: sellerFb,
         vintedListPrice: vintedTarget,
         ebayListPrice: ebayTarget,
         vintedNet, ebayNet, bestNet, netProfit: bestNet,
@@ -640,11 +750,20 @@ ${isFootwear ? 'FOOTWEAR RULE: Condition must be 8+ — sole wear, creasing and 
 
 Score TWO things 1-10. Be strict.
 
-APPEAL (1-10): Would this sell on Vinted UK within 2 weeks?
-- Score 8-10: Core desirable (black Sambas, white AF1s, popular colourways, sizes M/L/UK7-9)
-- Score 6-7: Decent but not exceptional
-- Score 1-5: Hard to sell (unusual colours, small sizes, niche styles)
-INSTANTLY SCORE 1 if: laces, socks, accessories, kids sizes, size 1/2/3 footwear, replacement parts, spare parts, bundle of 5+, damaged, broken
+APPEAL (1-10): Would this sell on Vinted UK within 2 weeks at a profit?
+Consider ALL of these factors:
+- Brand desirability right now (Nike/Adidas/Stone Island/Levi's = high, generic = low)
+- Colourway (black/navy/white/grey = fast sellers, neon/unusual = slow)
+- Style era (Y2K vintage, 90s sportswear, workwear = trending UP; formal, business = trending DOWN)
+- Size demand (M/L men's, 10-12 women's = fast; XS/XL/odd sizes = slow)
+- Vintage authenticity (single stitch, embroidered logos, 90s tags = premium; modern repro = discount)
+- TikTok/Depop appeal (would this be photographed well? does it have archive fashion potential?)
+
+Score 8-10: Core desirable — proven fast sellers (black Sambas, Champion reverse weave, Levi 501 W30-32, Nike spellout, vintage football shirts from big clubs)
+Score 6-7: Good but not exceptional — decent brand, mainstream style, common size
+Score 4-5: Slow — niche colourway, awkward size, style going out of trend
+Score 1-3: Very hard to sell — unusual colour, small size, out of trend, generic brand
+INSTANTLY SCORE 1 if: accessories only, size 1/2/3 footwear, replacement parts, spare parts, broken, novelty item
 
 CONDITION (1-10):
 ${isFootwear ? `FOOTWEAR (strict):
@@ -768,13 +887,12 @@ async function sendDealAlert(deals, scanCount = 99) {
 💰 Buy: <b>£${d.price}</b>${bids}
 📈 Sell on ${d.bestPlatform}: <b>£${d.bestPlatform === 'Vinted' ? d.vintedListPrice : d.ebayListPrice}</b>
 ✅ Net profit: <b>+£${d.bestNet.toFixed(0)}</b> (${d.roi}% ROI)
-${d.appealScore !== undefined ? `🤖 Appeal <b>${d.appealScore}/10</b> · Condition <b>${d.conditionScore}/10</b>` : ''}${d.appealReason ? `\n💬 ${d.appealReason}` : ''}
-📊 Market median: £${d.soldData.median} (${d.soldData.sampleSize} real sales)
+${d.appealScore !== undefined ? `🎯 Appeal <b>${d.appealScore}/10</b> · Condition <b>${d.conditionScore}/10</b> · Score <b>${d.score}/100</b>` : ''}${d.appealReason ? `\n💬 ${d.appealReason}` : ''}
+📊 Median: £${d.soldData.median}${d.soldData.usingCleanComps ? ' ✅ clean comps' : ''} · ${d.soldData.sampleSize} sales
+${d.soldData.fastSalePrice ? `⚡ Fast sale: ~£${d.soldData.fastSalePrice} · Full value: ~£${d.soldData.fullValuePrice}` : ''}
 💡 Buying at ${d.marketPercent}% of market value
 ${d.velocity ? d.velocity.label : ''}${urgency}
-${d.analysis ? `\n🤖 ${d.analysis}` : ''}
-
-<a href="${d.url}">👉 View on eBay</a>`;
+${d.analysis ? `\n🤖 ${d.analysis}` : ''}${d.isNewSeller ? "\n🆕 New seller (" + d.sellerFeedback + " feedback) — often underpriced" : ""}\n\n<a href="${d.url}">👉 View on ${d.source || "eBay"}</a>`;
 
     // Send photo for must-buys, text for strong deals
     if (d.image && d.confidenceTier === 'mustbuy') {
@@ -803,7 +921,7 @@ ${d.analysis ? `\n🤖 ${d.analysis}` : ''}
             ${d.isAuction ? `<span style="background:#E6F1FB;color:#185FA5;font-size:11px;font-weight:600;padding:3px 8px;border-radius:20px;margin-left:6px;">⏱ Auction ${d.hoursLeft}h left</span>` : ''}
           </div>
           <p style="font-size:15px;font-weight:700;margin:0 0 4px;color:#111;">${d.title}</p>
-          <p style="font-size:12px;color:#9ca3af;margin:0 0 12px;">Buying at <strong>${d.marketPercent}% of market value</strong> · ${d.soldData.sampleSize} real eBay sales · Median £${d.soldData.median}${d.appealScore !== undefined ? ` · Appeal ${d.appealScore}/10 · Condition ${d.conditionScore}/10` : ''}</p>
+          <p style="font-size:12px;color:#9ca3af;margin:0 0 12px;">Buying at <strong>${d.marketPercent}% of market value</strong> · ${d.soldData.sampleSize} sales · Median £${d.soldData.median}${d.soldData.usingCleanComps ? ' <span style="color:#22c55e;">✅ clean comps</span>' : ''} · Score ${d.score}/100${d.soldData.fastSalePrice ? ` · Fast sale ~£${d.soldData.fastSalePrice}` : ''}${d.appealScore !== undefined ? ` · Appeal ${d.appealScore}/10 · Condition ${d.conditionScore}/10` : ''}</p>
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;">
             <div style="text-align:center;background:#f9fafb;border-radius:8px;padding:8px;">
               <div style="font-size:10px;color:#9ca3af;">Buy</div>
@@ -876,15 +994,23 @@ async function runScan() {
 
   const newDeals = [];
 
-  // Scan Oxfam every 10th scan (~20 mins) — uncontested source
+  // Scan charity shops every 10th scan (~20 mins) — uncontested sources
   if (scanCount % 10 === 0) {
     try {
       const oxfamDeals = await scanOxfam();
       for (const deal of oxfamDeals) {
         if (!alertedIds.has(deal.id) || (Date.now() - alertedIds.get(deal.id)) > ALERT_COOLDOWN_MS) newDeals.push(deal);
       }
-      if (oxfamDeals.length) console.log(`Oxfam: ${oxfamDeals.length} candidates found`);
+      if (oxfamDeals.length) console.log(`Oxfam: ${oxfamDeals.length} candidates`);
     } catch(e) { console.error('Oxfam scan failed:', e.message); }
+
+    try {
+      const bhfDeals = await scanBHF();
+      for (const deal of bhfDeals) {
+        if (!alertedIds.has(deal.id) || (Date.now() - alertedIds.get(deal.id)) > ALERT_COOLDOWN_MS) newDeals.push(deal);
+      }
+      if (bhfDeals.length) console.log(`BHF: ${bhfDeals.length} candidates`);
+    } catch(e) { /* BHF silent fail */ }
   }
 
   for (const item of batch) {
