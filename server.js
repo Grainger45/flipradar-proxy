@@ -833,8 +833,11 @@ ${d.analysis ? `\n🤖 ${d.analysis}` : ''}
     </div>`).join('');
 
   // Rate limit — but ALWAYS send for must-buys regardless of timing
-  const hasMustBuys = mustBuyDeals.length > 0;
-  if (!hasMustBuys && Date.now() - lastEmailSent < EMAIL_RATE_LIMIT_MS) {
+  // Rate limit ALL emails — 2 hrs for must-buys, 24 hrs for strong-only
+  const mustBuyLimit = 2 * 60 * 60 * 1000;
+  const strongLimit = 24 * 60 * 60 * 1000;
+  const limit = mustBuyDeals.length > 0 ? mustBuyLimit : strongLimit;
+  if (Date.now() - lastEmailSent < limit) {
     console.log(`Email rate limited — last sent ${Math.round((Date.now()-lastEmailSent)/60000)} mins ago`);
     return;
   }
