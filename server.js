@@ -611,6 +611,10 @@ function processBrowseItems(items, queueItem, soldData, listingType) {
       if (/\b(3xl|4xl|5xl|6xl|xxxl)\b/i.test(title)) continue;
       // Block US kids sizing — 2T, 3T, 24M, 18M, 3 Months, toddler, infant, youth
       if (/\d+[tm]|months?|toddler|infant|baby|youth/i.test(title)) continue;
+      // Block kids/junior footwear in adult footwear searches
+      if (['trainers','boots'].includes(queueItem.cat)) {
+        if (/\b(kids?|junior|toddler|infant|boys?|girls?|children|child|youth|uk\s*[1-4]\b|eu\s*[12]\d\b|eu\s*3[0-5]\b)/i.test(title)) continue;
+      }
 
       // Block shorts/cutoffs from Levi's and denim searches
       if (titleLow.includes('levi') || queueItem.cat === 'denim') {
@@ -763,7 +767,7 @@ Score 8-10: Core desirable — proven fast sellers (black Sambas, Champion rever
 Score 6-7: Good but not exceptional — decent brand, mainstream style, common size
 Score 4-5: Slow — niche colourway, awkward size, style going out of trend
 Score 1-3: Very hard to sell — unusual colour, small size, out of trend, generic brand
-INSTANTLY SCORE 1 if: accessories only, size 1/2/3 footwear, replacement parts, spare parts, broken, novelty item
+INSTANTLY SCORE 1 if: accessories only, kids/junior/toddler footwear (UK1-4, EU24-35), replacement parts, spare parts, broken, novelty item, patent leather kids sizes
 
 CONDITION (1-10):
 ${isFootwear ? `FOOTWEAR (strict):
@@ -1042,13 +1046,20 @@ async function runScan() {
   lastScanTime = new Date();
 
   // Deduplicate by ID and normalised title
+  // Also deduplicate by price+brand to catch same listing found via multiple searches
   seenTitles.clear();
   const uniqueDeals = [];
   const seenInBatch = new Set();
+  const seenPriceBrand = new Map(); // brand+price -> count
   for (const deal of newDeals) {
     const normTitle = deal.title.toLowerCase().replace(/[^a-z0-9]/g,'').substring(0,40);
+    const priceBrandKey = (deal.brand || '') + '_' + deal.price;
+    const priceBrandCount = seenPriceBrand.get(priceBrandKey) || 0;
+    // Block if same brand+price appears 3+ times (same listing via multiple searches)
+    if (priceBrandCount >= 3) continue;
     if (!seenInBatch.has(deal.id) && !seenTitles.has(normTitle)) {
       seenInBatch.add(deal.id); seenTitles.add(normTitle);
+      seenPriceBrand.set(priceBrandKey, priceBrandCount + 1);
       uniqueDeals.push(deal);
     }
   }
