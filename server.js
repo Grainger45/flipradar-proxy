@@ -3,6 +3,7 @@
 // ENV VARS: EBAY_APP_ID, ANTHROPIC_API_KEY, RESEND_API_KEY, ALERT_EMAIL, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 
 const express = require('express');
+const { GAMES_QUEUE, GAMES_POSTAGE, CONSOLE_POSTAGE, FAKE_SIGNALS, scoreGame } = require('./games');
 const https = require('https');
 const http = require('http');
 const app = express();
@@ -10,6 +11,10 @@ app.use(express.json());
 
 // ── Config ────────────────────────────────────────────────────
 const MAX_BUY = parseFloat(process.env.MAX_BUY_PRICE || '20');
+// Premium brands get higher buy ceiling — better margins justify higher risk
+const PREMIUM_BRANDS = ['Stone Island','CP Company','Moncler','Canada Goose','Arc\'teryx','Burberry','Barbour'];
+const PREMIUM_MAX_BUY = 40; // £40 ceiling for premium brands only
+function getMaxBuy(brand) { return PREMIUM_BRANDS.includes(brand) ? PREMIUM_MAX_BUY : MAX_BUY; }
 const MIN_PROFIT = parseFloat(process.env.MIN_PROFIT || '7');   // lowered from 8
 const POSTAGE = 3.50;
 const ALERT_EMAIL = process.env.ALERT_EMAIL || 'l.grainger1996@gmail.com';
@@ -595,7 +600,7 @@ async function searchEbayBIN(item, soldData) {
 
     const url = 'https://api.ebay.com/buy/browse/v1/item_summary/search?' + new URLSearchParams({
       q: item.q,
-      filter: `price:[1..${MAX_BUY}],conditionIds:{1000|2500|2750|3000|4000|5000|6000},buyingOptions:{FIXED_PRICE},deliveryCountry:GB`,
+      filter: `price:[1..${getMaxBuy(item.brand)}],conditionIds:{1000|2500|2750|3000|4000|5000|6000},buyingOptions:{FIXED_PRICE},deliveryCountry:GB`,
       sort: 'newlyListed',
       limit: '50',
     });
@@ -623,7 +628,7 @@ async function searchEbayAuctions(item, soldData) {
     const endingSoon = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
     const url = 'https://api.ebay.com/buy/browse/v1/item_summary/search?' + new URLSearchParams({
       q: item.q,
-      filter: `price:[0.99..${MAX_BUY}],conditionIds:{1000|2500|2750|3000|4000|5000|6000},buyingOptions:{AUCTION},deliveryCountry:GB,endDate:[..${endingSoon}]`,
+      filter: `price:[0.99..${getMaxBuy(item.brand)}],conditionIds:{1000|2500|2750|3000|4000|5000|6000},buyingOptions:{AUCTION},deliveryCountry:GB,endDate:[..${endingSoon}]`,
       sort: 'endingSoonest',
       limit: '20',
     });
@@ -790,46 +795,61 @@ async function scoreWithClaude(deal) {
     const isFootwear = ['trainers','boots'].includes(deal.cat);
     const minCond = isFootwear ? MIN_CONDITION_FOOTWEAR : MIN_CONDITION;
 
-    const prompt = `You are a professional UK reseller who has bought and sold 10,000+ items. You lose money on bad purchases. Be BRUTALLY strict — 80% of items should fail.
+    // Seasonal context for scoring
+    const nowMonth = new Date().getMonth();
+    const isSummerNow = nowMonth >= 5 && nowMonth <= 8;
+    const isWinterNow = nowMonth >= 9 || nowMonth <= 1;
+    const seasonNote = isWinterNow ? 'WINTER CONTEXT: Heavy outerwear, coats, boots sell fastest right now.' :
+                       isSummerNow ? 'SUMMER CONTEXT: Light layers, trainers, jeans sell fastest. Heavy coats are slow.' :
+                       'TRANSITION SEASON: Mid-layers and versatile pieces sell well.';
+
+    // Counterfeit risk brands
+    const fakeRiskBrands = ['Stone Island','Supreme','Carhartt','Off-White','Palace','Trapstar'];
+    const fakeNote = fakeRiskBrands.includes(deal.brand) ?
+      `COUNTERFEIT WARNING: ${deal.brand} is heavily faked. Check: correct badge/logo placement, authentic label fonts, realistic price for brand. If anything looks off, score appeal 1.` : '';
+
+    const prompt = `You are an expert UK reseller specialising in Vinted. You buy secondhand items on eBay and charity shops, then resell on Vinted to 18-35 year old UK buyers. Every bad purchase costs you money. Be STRICT — at least 70% of items should fail.
 
 Item: "${deal.title}"
 Brand: ${deal.brand}
 Category: ${deal.cat}
-Buy price: £${deal.price}
-Source: ${deal.source || 'eBay'}${deal.source === 'Oxfam' ? ' (NOTE: charity shop condition grades — Very Good = used/acceptable on eBay, Good = well worn with likely visible marks)' : ''}
-${isFootwear ? 'FOOTWEAR RULE: Condition must be 8+ — sole wear, creasing and yellowing kill resale value.' : ''}
+Buy price: £${deal.price} | Est. sell: £${deal.vintedListPrice || '?'} | Est. profit: £${deal.bestNet ? deal.bestNet.toFixed(0) : '?'}
+Source: ${deal.source || 'eBay'}${deal.source === 'Oxfam' || deal.source === 'BHF' ? ' (charity shop — condition grades are optimistic: Very Good = acceptable used, Good = visibly worn)' : ''}
+${seasonNote}
+${fakeNote}
+${isFootwear ? 'FOOTWEAR RULE: Condition must be 8+ — sole wear, creasing, yellowing destroy resale value on Vinted.' : ''}
 
-Score TWO things 1-10. Be strict.
+Score TWO things strictly:
 
-APPEAL (1-10): Would this sell on Vinted UK within 2 weeks at a profit?
-Consider ALL of these factors:
-- Brand desirability right now (Nike/Adidas/Stone Island/Levi's = high, generic = low)
-- Colourway (black/navy/white/grey = fast sellers, neon/unusual = slow)
-- Style era (Y2K vintage, 90s sportswear, workwear = trending UP; formal, business = trending DOWN)
-- Size demand (M/L men's, 10-12 women's = fast; XS/XL/odd sizes = slow)
-- Vintage authenticity (single stitch, embroidered logos, 90s tags = premium; modern repro = discount)
-- TikTok/Depop appeal (would this be photographed well? does it have archive fashion potential?)
+APPEAL (1-10): Would an 18-35 UK buyer on Vinted pay good money for this within 2 weeks?
+Key factors for Vinted UK buyers specifically:
+- Brand heat on Vinted right now: Stone Island/Carhartt WIP/Levi 501/Nike vintage/Adidas Samba/New Balance = HIGH. Ralph Lauren shirt/Next/M&S/formal = LOW.
+- Colourway: black/navy/white/grey/brown = fast. Lilac/yellow/orange/neon = slow.
+- Size: men's M/L or women's 10/12 = fast. S/XS or XXL = slow. Penalise -2 for S or smaller.
+- Style: Y2K/90s/workwear/gorpcore/archive = trending UP. Formal/business/early 2010s = trending DOWN.
+- Vintage signals: single stitch hem, embroidered logo, 90s country tag, thick cotton = premium +2.
+- No condition info in title? Treat as average condition, do not assume good.
 
-Score 8-10: Core desirable — proven fast sellers (black Sambas, Champion reverse weave, Levi 501 W30-32, Nike spellout, vintage football shirts from big clubs)
-Score 6-7: Good but not exceptional — decent brand, mainstream style, common size
-Score 4-5: Slow — niche colourway, awkward size, style going out of trend
-Score 1-3: Very hard to sell — unusual colour, small size, out of trend, generic brand
-INSTANTLY SCORE 1 if: accessories only, kids/junior/toddler footwear (UK1-4, EU24-35), replacement parts, spare parts, broken, novelty item, patent leather kids sizes
+8-10: Proven Vinted flippers — black Sambas, Levi 501 W29-33, Nike spellout hoodie, Champion reverse weave, vintage football shirt (big club), Carhartt WIP jacket (black/beige)
+6-7: Good — known brand, mainstream colourway, common size
+4-5: Slow — niche colour, awkward size, brand losing relevance
+1-3: Won't sell — unusual item, wrong demographic, out of trend
+SCORE 1 INSTANTLY: replacement parts, spare parts, single shoe, costume, broken/for spares, kids item
 
-CONDITION (1-10):
-${isFootwear ? `FOOTWEAR (strict):
-- 9-10: BNWT/unworn/new with tags
-- 7-8: Excellent with SPECIFIC detail ("minimal sole wear", "leather great condition")
-- 1-6: ANY vague description — "good condition", "pre-owned excellent" = MAX 5
-- 1-3: Any mention of wear, marks, creasing, yellowing` : `
-- 8-10: BNWT, unworn, immaculate, new with tags
-- 6-7: Excellent/very good with clear specific description
-- 1-5: Vague like "good used condition", "pre-owned excellent" with no specifics`}
+CONDITION (1-10) — be strict, vague = low score:
+${isFootwear ? `Footwear:
+9-10: New/unworn/BNWT with specific evidence
+7-8: Excellent — must have specific detail ("barely worn", "soles clean", "no creasing")
+5-6: Good — some wear mentioned or vague description
+1-4: Any wear, marks, creasing, yellowing, or just "good condition"` : `Clothing:
+9-10: BNWT/unworn/new with tags
+7-8: Excellent/very good WITH specific detail ("no marks", "worn twice", "like new")  
+5-6: Good used — vague "good condition", no detail given
+1-4: Signs of wear, marks, fading, pilling, damage, or charity shop "Good" grade`}
+${deal.image ? '\nImage included — use it. Check for actual wear, stains, fading, condition issues visible in photo.' : '\nNo image — score condition conservatively based on title only.'}
 
-${deal.image ? 'Image provided — use it to assess actual condition. Look for sole wear, creasing, staining, yellowing, marks.' : ''}
-
-Respond ONLY with this JSON (no other text):
-{"appeal":7,"condition":6,"appealReason":"one sentence","conditionReason":"one sentence","pass":${isFootwear ? 'true if appeal>=' + MIN_APPEAL + ' AND condition>=' + MIN_CONDITION_FOOTWEAR : 'true if appeal>=' + MIN_APPEAL + ' AND condition>=' + MIN_CONDITION}}`;
+Respond ONLY with JSON:
+{"appeal":7,"condition":6,"appealReason":"max 12 words why","conditionReason":"max 10 words why","pass":${isFootwear ? 'true if appeal>=' + MIN_APPEAL + ' AND condition>=' + MIN_CONDITION_FOOTWEAR : 'true if appeal>=' + MIN_APPEAL + ' AND condition>=' + MIN_CONDITION}}`;
 
     const content = deal.image
       ? [{ type: 'image', source: { type: 'url', url: deal.image, media_type: 'image/jpeg' } }, { type: 'text', text: prompt }]
@@ -838,7 +858,7 @@ Respond ONLY with this JSON (no other text):
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 120, messages: [{ role: 'user', content }] }),
+      body: JSON.stringify({ model: deal.price >= 15 ? 'claude-sonnet-4-5' : 'claude-haiku-4-5-20251001', max_tokens: 150, messages: [{ role: 'user', content }] }),
       signal: AbortSignal.timeout(20000)
     });
     if (!res.ok) return null;
@@ -1391,4 +1411,7 @@ app.listen(PORT, () => {
     setTimeout(pollTelegram, 30000);
   }
   setTimeout(pollTelegram, 5000);
+  // Games scanner — every 10 minutes
+  setInterval(runGamesScan, 10 * 60 * 1000);
+  setTimeout(runGamesScan, 30000); // first run 30s after startup
 });
