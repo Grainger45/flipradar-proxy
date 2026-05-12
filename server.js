@@ -1412,6 +1412,94 @@ app.listen(PORT, () => {
   }
   setTimeout(pollTelegram, 5000);
   // Games scanner — every 10 minutes
+  const gamesAlertedIds = new Map();
+  let gamesIdx = 0;
+  async function runGamesScan() {
+    if (!process.env.ANTHROPIC_API_KEY) return;
+    const token = await getEbayToken();
+    if (!token) return;
+    const batch = [];
+    for (let i = 0; i < 4; i++) batch.push(GAMES_QUEUE[(gamesIdx + i) % GAMES_QUEUE.length]);
+    gamesIdx = (gamesIdx + 4) % GAMES_QUEUE.length;
+    const deals = [];
+    for (const item of batch) {
+      try {
+        const soldData = await getRealSoldData(item.soldQ);
+        if (!soldData || soldData.median < 5) continue;
+        const isConsole = item.cat === 'console';
+        const postage = isConsole ? CONSOLE_POSTAGE : GAMES_POSTAGE;
+        const maxBuyGames = isConsole ? 40 : 25;
+        const url = 'https://api.ebay.com/buy/browse/v1/item_summary/search?' + new URLSearchParams({
+          q: item.q,
+          filter: `price:[1..${maxBuyGames}],conditionIds:{1000|2500|3000|4000|5000},buyingOptions:{FIXED_PRICE},deliveryCountry:GB`,
+          sort: 'newlyListed', limit: '30'
+        });
+        const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_GB' }});
+        const parsed = await res.json();
+        const items = parsed?.itemSummaries || [];
+        for (const ebayItem of items) {
+          const price = parseFloat(ebayItem.price?.value || '0');
+          if (price < 1 || price > maxBuyGames) continue;
+          const title = ebayItem.title || '';
+          const titleLow = title.toLowerCase();
+          if (FAKE_SIGNALS.some(s => titleLow.includes(s))) continue;
+          if (isConsole && /untested|spares|repair|not working/i.test(title)) continue;
+          if (ebayItem.itemLocation?.country && ebayItem.itemLocation.country !== 'GB') continue;
+          const net = soldData.median * 0.92 - price - postage;
+          if (net < 8) continue;
+          const marketPercent = Math.round((price / soldData.median) * 100);
+          let score = 0;
+          if (marketPercent <= 30) score += 50;
+          else if (marketPercent <= 45) score += 38;
+          else if (marketPercent <= 60) score += 22;
+          else if (marketPercent <= 75) score += 12;
+          if (net >= 30) score += 20; else if (net >= 15) score += 12; else if (net >= 8) score += 6;
+          if (soldData.sampleSize >= 20) score += 8;
+          if (/complete|cib|boxed|with manual/i.test(title)) score += 15;
+          if (/tested|working|fully working/i.test(title)) score += 10;
+          if (score < 40) continue;
+          deals.push({
+            id: ebayItem.itemId, title, price,
+            url: ebayItem.itemWebUrl,
+            image: ebayItem.image?.imageUrl || '',
+            brand: item.brand, cat: item.cat,
+            estSell: Math.round(soldData.median * 0.92),
+            bestNet: Math.round(net * 100) / 100,
+            roi: Math.round((net / price) * 100),
+            marketPercent, score,
+            confidenceTier: score >= 65 ? 'mustbuy' : 'strong',
+            soldData, source: 'eBay', isConsole
+          });
+        }
+        await new Promise(r => setTimeout(r, 500));
+      } catch(e) { console.error('Games scan error:', e.message); }
+    }
+    if (!deals.length) return;
+    const passed = [];
+    for (const deal of deals.slice(0, 5)) {
+      if (gamesAlertedIds.has(deal.id)) continue;
+      const scored = await scoreGame(deal, process.env.ANTHROPIC_API_KEY);
+      if (!scored || !scored.pass) continue;
+      deal.appealScore = scored.appeal;
+      deal.conditionScore = scored.condition;
+      deal.appealReason = scored.appealReason;
+      passed.push(deal);
+      await new Promise(r => setTimeout(r, 200));
+    }
+    for (const d of passed.slice(0, 3)) {
+      gamesAlertedIds.set(d.id, Date.now());
+      const msg = `🎮 <b>GAMES ${d.confidenceTier === 'mustbuy' ? 'MUST BUY' : 'STRONG DEAL'}</b>\n` +
+        `<b>${d.title.substring(0, 55)}</b>\n` +
+        `💰 Buy £${d.price} → eBay ~£${d.estSell}\n` +
+        `📈 Profit +£${d.bestNet} (${d.roi}% ROI)\n` +
+        `📊 ${d.soldData.sampleSize} real sales · Median £${d.soldData.median}\n` +
+        `${d.appealScore ? `🤖 Appeal ${d.appealScore}/10 · ${d.appealReason}` : ''}\n` +
+        `<a href="${d.url}">👉 View on eBay</a>`;
+      await sendTelegram(msg);
+      await new Promise(r => setTimeout(r, 500));
+    }
+    if (passed.length) console.log(`[GAMES] ${passed.length} deals alerted`);
+  }
   setInterval(runGamesScan, 10 * 60 * 1000);
   setTimeout(runGamesScan, 30000); // first run 30s after startup
 });
